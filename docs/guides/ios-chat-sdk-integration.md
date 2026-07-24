@@ -1,6 +1,6 @@
 # iOS ChatSDK Integration Guide
 
-이 문서는 iOS 앱에서 `SpectraChatSDK`를 Swift Package로 붙이고, AuthSDK token provider를 통해 Chat REST API와 WebSocket command envelope를 사용하는 현재 기준을 설명한다.
+이 문서는 iOS 앱에서 `SpectraChatSDK`를 Swift Package로 붙이고, AuthSDK token provider를 통해 Chat REST API, authenticated WebSocket request와 command envelope를 사용하는 현재 기준을 설명한다.
 
 ## 1. Package 추가
 
@@ -31,7 +31,8 @@ struct ChatTokenProvider: SpectraChatAccessTokenProviding {
 ```swift
 let chat = SpectraChatClient(
     configuration: SpectraChatClientConfiguration(
-        baseURL: URL(string: "https://chat.spectra.kr")!
+        baseURL: URL(string: "https://chat.spectra.kr")!,
+        projectId: "project_123"
     ),
     tokenProvider: ChatTokenProvider(auth: authClient)
 )
@@ -43,18 +44,45 @@ let chat = SpectraChatClient(
 let rooms = try await chat.listRooms(limit: 50)
 let messages = try await chat.listMessages(roomID: rooms[0].roomID)
 
-try await chat.updateReadCursor(
+let sent = try await chat.sendMessage(
     roomID: rooms[0].roomID,
-    lastReadServerSequence: messages.last?.serverSequence ?? 0
+    content: SpectraChatSendContent(kind: "text", text: "hello"),
+    idempotencyKey: UUID().uuidString
+)
+
+try await chat.markRead(
+    roomID: rooms[0].roomID,
+    lastReadServerSequence: sent.serverSequence
 )
 ```
 
-## 5. WebSocket command envelope
+## 5. Storage attachment boundary
+
+ChatSDK는 StorageSDK에 직접 의존하지 않는다. 앱은 StorageSDK로 업로드를 완료한 뒤 object reference만 Chat message content에 넘긴다.
+
+```swift
+let imageMessage = try await chat.sendMessage(
+    roomID: "room_123",
+    content: SpectraChatSendContent(
+        kind: "media",
+        text: "사진 보냈어",
+        storageObjectReferences: [
+            SpectraChatStorageObjectReference(
+                objectKey: "/chat/room_123/image.png",
+                contentType: "image/png"
+            )
+        ]
+    ),
+    idempotencyKey: UUID().uuidString
+)
+```
+
+## 6. WebSocket command envelope
 
 현재 SDK는 WebSocket transport를 직접 소유하지 않고, 서버 계약에 맞는 command envelope를 생성한다.
 
 ```swift
-let socketURL = try chat.socketURL()
+let request = try await chat.socketRequest()
 let command = chat.makeTextMessageCommand(
     roomID: "room_123",
     text: "hello",
@@ -62,9 +90,9 @@ let command = chat.makeTextMessageCommand(
 )
 ```
 
-앱은 기존 WebSocket runtime 또는 후속 SDK transport slice로 `command`를 encode해 `/v1/socket`에 전송한다.
+앱은 기존 WebSocket runtime 또는 후속 SDK transport slice로 `request`에 연결한 뒤 `command`를 encode해 `/v1/socket`에 전송한다.
 
-## 6. Push notification 경계
+## 7. Push notification 경계
 
 ChatSDK가 push를 직접 발송하지 않는다.
 

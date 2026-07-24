@@ -18,9 +18,11 @@ public struct StaticSpectraChatAccessTokenProvider: SpectraChatAccessTokenProvid
 
 public struct SpectraChatClientConfiguration: Sendable {
     public var baseURL: URL
+    public var projectId: String?
 
-    public init(baseURL: URL) {
+    public init(baseURL: URL, projectId: String? = nil) {
         self.baseURL = baseURL
+        self.projectId = projectId
     }
 }
 
@@ -98,17 +100,55 @@ public struct SpectraChatSendContent: Codable, Equatable, Sendable {
     public var kind: String
     public var text: String?
     public var assetIDs: [String]
+    public var storageObjectReferences: [SpectraChatStorageObjectReference]?
 
-    public init(kind: String, text: String? = nil, assetIDs: [String] = []) {
+    public init(
+        kind: String,
+        text: String? = nil,
+        assetIDs: [String] = [],
+        storageObjectReferences: [SpectraChatStorageObjectReference]? = nil
+    ) {
         self.kind = kind
         self.text = text
         self.assetIDs = assetIDs
+        self.storageObjectReferences = storageObjectReferences
     }
 
     enum CodingKeys: String, CodingKey {
         case kind
         case text
         case assetIDs = "asset_ids"
+        case storageObjectReferences = "storage_object_references"
+    }
+}
+
+public struct SpectraChatStorageObjectReference: Codable, Equatable, Sendable {
+    public var objectKey: String
+    public var contentType: String?
+    public var byteSize: Int64?
+    public var checksumSHA256: String?
+    public var metadata: [String: String]
+
+    public init(
+        objectKey: String,
+        contentType: String? = nil,
+        byteSize: Int64? = nil,
+        checksumSHA256: String? = nil,
+        metadata: [String: String] = [:]
+    ) {
+        self.objectKey = objectKey
+        self.contentType = contentType
+        self.byteSize = byteSize
+        self.checksumSHA256 = checksumSHA256
+        self.metadata = metadata
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case objectKey = "object_key"
+        case contentType = "content_type"
+        case byteSize = "byte_size"
+        case checksumSHA256 = "checksum_sha256"
+        case metadata
     }
 }
 
@@ -220,6 +260,24 @@ public struct SpectraChatReadCursorUpdate: Codable, Equatable, Sendable {
     }
 }
 
+public struct SpectraChatCreateRoomRequest: Codable, Equatable, Sendable {
+    public var kind: String
+    public var title: String?
+    public var participantUserIDs: [String]
+
+    public init(kind: String, title: String? = nil, participantUserIDs: [String]) {
+        self.kind = kind
+        self.title = title
+        self.participantUserIDs = participantUserIDs
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case title
+        case participantUserIDs = "participant_user_ids"
+    }
+}
+
 public struct SpectraChatErrorResponse: Codable, Equatable, Sendable {
     public var code: String
     public var message: String
@@ -236,6 +294,7 @@ public struct SpectraChatErrorResponse: Codable, Equatable, Sendable {
 
 public enum SpectraChatError: Error, Equatable, Sendable {
     case invalidBaseURL
+    case invalidRequest(String)
     case invalidResponse
     case httpStatus(Int, SpectraChatErrorResponse?)
 }
@@ -269,6 +328,25 @@ public final class SpectraChatClient: @unchecked Sendable {
         return response.rooms
     }
 
+    public func createRoom(_ input: SpectraChatCreateRoomRequest) async throws -> SpectraChatRoom {
+        switch input.kind {
+        case "direct":
+            guard let participantUserID = input.participantUserIDs.first else {
+                throw SpectraChatError.invalidRequest("direct room requires one participant user id")
+            }
+            return try await createDirectRoom(participantUserID: participantUserID)
+        case "group":
+            return try await createGroupRoom(title: input.title ?? "", participantUserIDs: input.participantUserIDs)
+        default:
+            let request = try await makeJSONRequest(
+                url: url(path: "/v1/chat/rooms"),
+                method: "POST",
+                body: input
+            )
+            return try await decodeDataResponse(request: request, expectedStatus: 201)
+        }
+    }
+
     public func createDirectRoom(participantUserID: String) async throws -> SpectraChatRoom {
         let request = try await makeJSONRequest(
             url: url(path: "/v1/chat/rooms/direct"),
@@ -283,6 +361,28 @@ public final class SpectraChatClient: @unchecked Sendable {
             url: url(path: "/v1/chat/rooms/group"),
             method: "POST",
             body: GroupCreateRequest(title: title, participantUserIDs: participantUserIDs)
+        )
+        return try await decodeDataResponse(request: request, expectedStatus: 201)
+    }
+
+    public func sendMessage(
+        roomID: String,
+        content: SpectraChatSendContent,
+        clientMessageID: String = UUID().uuidString,
+        replyToMessageID: String? = nil,
+        mentionedUserIDs: [String] = [],
+        idempotencyKey: String? = nil
+    ) async throws -> SpectraChatMessage {
+        let request = try await makeJSONRequest(
+            url: url(path: "/v1/chat/rooms/\(encodedPathSegment(roomID))/messages"),
+            method: "POST",
+            idempotencyKey: idempotencyKey,
+            body: SpectraChatSendMessage(
+                clientMessageID: clientMessageID,
+                content: content,
+                replyToMessageID: replyToMessageID,
+                mentionedUserIDs: mentionedUserIDs
+            )
         )
         return try await decodeDataResponse(request: request, expectedStatus: 201)
     }
@@ -305,6 +405,10 @@ public final class SpectraChatClient: @unchecked Sendable {
         )
         let response: MessagesResponse = try await decodeDataResponse(request: request, expectedStatus: 200)
         return response.messages
+    }
+
+    public func markRead(roomID: String, lastReadServerSequence: Int64) async throws {
+        try await updateReadCursor(roomID: roomID, lastReadServerSequence: lastReadServerSequence)
     }
 
     public func updateReadCursor(roomID: String, lastReadServerSequence: Int64) async throws {
@@ -375,17 +479,32 @@ public final class SpectraChatClient: @unchecked Sendable {
         return url
     }
 
-    private func makeRequest(url: URL, method: String) async throws -> URLRequest {
+    public func socketRequest() async throws -> URLRequest {
+        try await makeRequest(url: socketURL(), method: "GET")
+    }
+
+    private func makeRequest(url: URL, method: String, idempotencyKey: String? = nil) async throws -> URLRequest {
         let token = try await tokenProvider.accessToken()
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let projectId = configuration.projectId {
+            request.setValue(projectId, forHTTPHeaderField: "X-Spectra-Project-Id")
+        }
+        if let idempotencyKey {
+            request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
+        }
         return request
     }
 
-    private func makeJSONRequest<Body: Encodable>(url: URL, method: String, body: Body) async throws -> URLRequest {
-        var request = try await makeRequest(url: url, method: method)
+    private func makeJSONRequest<Body: Encodable>(
+        url: URL,
+        method: String,
+        idempotencyKey: String? = nil,
+        body: Body
+    ) async throws -> URLRequest {
+        var request = try await makeRequest(url: url, method: method, idempotencyKey: idempotencyKey)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(body)
         return request

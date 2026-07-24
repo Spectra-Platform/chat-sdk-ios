@@ -105,6 +105,47 @@ final class SpectraChatClientTests: XCTestCase {
         XCTAssertEqual(room.roomID, "room_123")
     }
 
+    func testSendMessageUsesBearerProjectAndIdempotency() async throws {
+        let client = makeClient(projectId: "project_123")
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/chat/rooms/room_123/messages")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer chat_access_token")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Spectra-Project-Id"), "project_123")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), "idem_123")
+            let json = try JSONSerialization.jsonObject(with: requestBodyData(request)) as? [String: Any]
+            XCTAssertEqual(json?["client_message_id"] as? String, "client_123")
+            let content = json?["content"] as? [String: Any]
+            XCTAssertEqual(content?["kind"] as? String, "text")
+            XCTAssertEqual(content?["text"] as? String, "hello")
+            let storageRefs = content?["storage_object_references"] as? [[String: Any]]
+            XCTAssertEqual(storageRefs?.first?["object_key"] as? String, "/chat/room_123/image.png")
+            XCTAssertEqual(storageRefs?.first?["content_type"] as? String, "image/png")
+            return messageResponse(status: 201)
+        }
+
+        let message = try await client.sendMessage(
+            roomID: "room_123",
+            content: SpectraChatSendContent(
+                kind: "text",
+                text: "hello",
+                storageObjectReferences: [
+                    SpectraChatStorageObjectReference(
+                        objectKey: "/chat/room_123/image.png",
+                        contentType: "image/png",
+                        byteSize: 10,
+                        checksumSHA256: "checksum"
+                    ),
+                ]
+            ),
+            clientMessageID: "client_123",
+            idempotencyKey: "idem_123"
+        )
+
+        XCTAssertEqual(message.messageID, "msg_123")
+        XCTAssertEqual(message.content.text, "hello")
+    }
+
     func testReadMediaURLsSendsAssetIDs() async throws {
         let client = makeClient()
         MockURLProtocol.handler = { request in
@@ -158,6 +199,16 @@ final class SpectraChatClientTests: XCTestCase {
         XCTAssertEqual(content?["text"] as? String, "hello")
     }
 
+    func testSocketRequestUsesWebSocketURLAndBearer() async throws {
+        let client = makeClient(baseURL: URL(string: "https://chat.example.test/api")!)
+
+        let request = try await client.socketRequest()
+
+        XCTAssertEqual(request.url?.absoluteString, "wss://chat.example.test/api/v1/socket")
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer chat_access_token")
+    }
+
     func testHTTPErrorDecodesChatError() async throws {
         let client = makeClient()
         MockURLProtocol.handler = { request in
@@ -189,12 +240,15 @@ final class SpectraChatClientTests: XCTestCase {
         }
     }
 
-    private func makeClient() -> SpectraChatClient {
+    private func makeClient(
+        baseURL: URL = URL(string: "https://chat.example.test")!,
+        projectId: String? = nil
+    ) -> SpectraChatClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockURLProtocol.self]
         let session = URLSession(configuration: configuration)
         return SpectraChatClient(
-            configuration: SpectraChatClientConfiguration(baseURL: URL(string: "https://chat.example.test")!),
+            configuration: SpectraChatClientConfiguration(baseURL: baseURL, projectId: projectId),
             tokenProvider: StaticSpectraChatAccessTokenProvider(token: "chat_access_token"),
             urlSession: session
         )
@@ -237,6 +291,33 @@ private func roomResponse(status: Int) -> (HTTPURLResponse, Data) {
             "unread_count": 0,
             "created_at": "2026-07-24T01:00:00Z",
             "updated_at": "2026-07-24T01:00:00Z"
+          }
+        }
+        """
+    )
+}
+
+private func messageResponse(status: Int) -> (HTTPURLResponse, Data) {
+    jsonResponse(
+        status: status,
+        body: """
+        {
+          "data": {
+            "message_id": "msg_123",
+            "room_id": "room_123",
+            "server_sequence": 1,
+            "client_message_id": "client_123",
+            "sender_user_id": "usr_a",
+            "content": {
+              "kind": "text",
+              "text": "hello",
+              "media_items": []
+            },
+            "reply_to_message_id": null,
+            "mentioned_user_ids": [],
+            "created_at": "2026-07-24T01:02:00Z",
+            "edited_at": null,
+            "deleted_at": null
           }
         }
         """
