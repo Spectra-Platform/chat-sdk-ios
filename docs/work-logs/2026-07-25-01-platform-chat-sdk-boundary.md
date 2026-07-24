@@ -39,4 +39,4 @@
 
 ## 커밋 기록
 
-- 이번 작업 커밋에서 기록한다.
+- `1881b11` — `feat: refine platform chat sdk boundary`
