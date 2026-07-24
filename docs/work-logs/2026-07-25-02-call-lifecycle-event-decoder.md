@@ -38,4 +38,4 @@ Call Platform을 별도 media 서버로 두되, 통화 초대·수락·종료 �
 
 ## 커밋 기록
 
-- 이번 작업 완료 후 별도 문서 커밋에 기록한다.
+- `8d4e467` — `feat: decode call lifecycle chat events`
