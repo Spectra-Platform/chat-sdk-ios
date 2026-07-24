@@ -209,6 +209,97 @@ final class SpectraChatClientTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer chat_access_token")
     }
 
+    func testCallLifecycleEventDecodesWithoutMediaTransportCredential() throws {
+        let data = Data(
+            """
+            {
+              "event_id": "evt_call_invited_01",
+              "event_type": "call.invited",
+              "event_version": "2026-07-25",
+              "project_id": "proj_123",
+              "conversation_id": "conv_123",
+              "room_id": "room_123",
+              "occurred_at": "2026-07-25T00:00:00Z",
+              "actor": {
+                "app_user_id": "app_user_123"
+              },
+              "call": {
+                "call_id": "call_123",
+                "call_session_id": "call_session_123",
+                "status": "ringing",
+                "media_mode": "video",
+                "call_type": "direct"
+              },
+              "participants": [
+                {
+                  "participant_id": "call_participant_123",
+                  "app_user_id": "app_user_123",
+                  "state": "accepted"
+                },
+                {
+                  "participant_id": "call_participant_456",
+                  "app_user_id": "app_user_456",
+                  "state": "invited"
+                }
+              ],
+              "trace": {
+                "message_id": "msg_call_trace_123",
+                "client_reference_id": "ios-call-compose-001"
+              }
+            }
+            """.utf8
+        )
+
+        let event = try SpectraChatCallLifecycleEvent.decode(from: data)
+
+        XCTAssertEqual(event.eventType, .invited)
+        XCTAssertEqual(event.conversationID, "conv_123")
+        XCTAssertEqual(event.roomID, "room_123")
+        XCTAssertEqual(event.call.mediaMode, "video")
+        XCTAssertEqual(event.participants.map(\.state), ["accepted", "invited"])
+        XCTAssertFalse(event.carriesMediaTransportCredential)
+    }
+
+    func testCallLifecycleEventAcceptsSingularParticipantPayload() throws {
+        let data = Data(
+            """
+            {
+              "event_id": "evt_call_accepted_01",
+              "event_type": "call.accepted",
+              "event_version": "2026-07-25",
+              "conversation_id": "conv_123",
+              "room_id": "room_123",
+              "occurred_at": "2026-07-25T00:00:03Z",
+              "actor": {
+                "app_user_id": "app_user_456"
+              },
+              "call": {
+                "call_id": "call_123",
+                "status": "ringing",
+                "media_mode": "video",
+                "call_type": "direct"
+              },
+              "participant": {
+                "participant_id": "call_participant_456",
+                "app_user_id": "app_user_456",
+                "state": "accepted"
+              }
+            }
+            """.utf8
+        )
+
+        let event = try SpectraChatCallLifecycleEvent.decode(from: data)
+
+        XCTAssertEqual(event.eventType, .accepted)
+        XCTAssertEqual(event.participants, [
+            SpectraChatCallParticipant(
+                participantID: "call_participant_456",
+                appUserID: "app_user_456",
+                state: "accepted"
+            )
+        ])
+    }
+
     func testHTTPErrorDecodesChatError() async throws {
         let client = makeClient()
         MockURLProtocol.handler = { request in

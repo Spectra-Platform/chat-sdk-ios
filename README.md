@@ -21,10 +21,12 @@ Swift Package 기반의 Spectra Platform Chat iOS SDK다. 첫 slice는 AuthSDK�
   - `message.send` command envelope
   - `read_cursor.update` command envelope
   - `/v1/socket` URL derivation
+  - `call.invited`/`call.accepted`/`call.declined`/`call.joined`/`call.left`/`call.ended`/`call.missed` lifecycle event decoding
 - Attachment boundary:
   - Storage SDK 직접 의존 없이 `SpectraChatStorageObjectReference`를 메시지 content에 첨부 가능
 
 ChatSDK는 Notification push를 직접 발송하지 않는다. 메시지 저장 후 push 요청은 Chat 서버의 durable outbox와 Notification/Delivery consumer가 담당한다.
+ChatSDK의 call lifecycle decoder는 CallKit 또는 LiveKit token을 직접 다루지 않는다. Chat socket payload에는 통화 상태 참조만 있고, WebRTC SDP/ICE, LiveKit participant token, TURN credential과 provider secret은 Call API/CallSDK에서 받아야 한다.
 
 ## 설치
 
@@ -108,7 +110,7 @@ swift test
 ## 현재 미완료 경계
 
 - URLSessionWebSocketTask 기반 reconnect/runtime transport
-- message.created/read_cursor.updated/typing.updated/call event decoding convenience
+- message.created/read_cursor.updated/typing.updated event decoding convenience
 - rich media upload는 Storage SDK upload 후 `SpectraChatStorageObjectReference` 전달 흐름으로 앱에서 연결 필요
 - 실제 Spectra iOS 앱 integration
 - 실제 message send → Chat outbox → Notification push 기기 수신 E2E

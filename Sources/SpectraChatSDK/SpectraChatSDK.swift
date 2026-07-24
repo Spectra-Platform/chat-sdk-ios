@@ -260,6 +260,214 @@ public struct SpectraChatReadCursorUpdate: Codable, Equatable, Sendable {
     }
 }
 
+public enum SpectraChatCallEventType: String, CaseIterable, Codable, Sendable {
+    case invited = "call.invited"
+    case accepted = "call.accepted"
+    case declined = "call.declined"
+    case joined = "call.joined"
+    case left = "call.left"
+    case ended = "call.ended"
+    case missed = "call.missed"
+
+    public var isLifecycleEvent: Bool { true }
+}
+
+public struct SpectraChatCallActor: Codable, Equatable, Sendable {
+    public var appUserID: String
+
+    public init(appUserID: String) {
+        self.appUserID = appUserID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case appUserID = "app_user_id"
+    }
+}
+
+public struct SpectraChatCallSummary: Codable, Equatable, Sendable {
+    public var callID: String
+    public var callSessionID: String?
+    public var status: String
+    public var mediaMode: String
+    public var callType: String
+    public var endedReason: String?
+
+    public init(
+        callID: String,
+        callSessionID: String? = nil,
+        status: String,
+        mediaMode: String,
+        callType: String,
+        endedReason: String? = nil
+    ) {
+        self.callID = callID
+        self.callSessionID = callSessionID
+        self.status = status
+        self.mediaMode = mediaMode
+        self.callType = callType
+        self.endedReason = endedReason
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case callID = "call_id"
+        case callSessionID = "call_session_id"
+        case status
+        case mediaMode = "media_mode"
+        case callType = "call_type"
+        case endedReason = "ended_reason"
+    }
+}
+
+public struct SpectraChatCallParticipant: Codable, Equatable, Sendable {
+    public var participantID: String?
+    public var appUserID: String
+    public var state: String
+
+    public init(
+        participantID: String? = nil,
+        appUserID: String,
+        state: String
+    ) {
+        self.participantID = participantID
+        self.appUserID = appUserID
+        self.state = state
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case participantID = "participant_id"
+        case appUserID = "app_user_id"
+        case state
+    }
+}
+
+public struct SpectraChatCallTrace: Codable, Equatable, Sendable {
+    public var messageID: String?
+    public var clientReferenceID: String?
+
+    public init(messageID: String? = nil, clientReferenceID: String? = nil) {
+        self.messageID = messageID
+        self.clientReferenceID = clientReferenceID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case messageID = "message_id"
+        case clientReferenceID = "client_reference_id"
+    }
+}
+
+public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
+    public var eventID: String
+    public var eventType: SpectraChatCallEventType
+    public var eventVersion: String?
+    public var projectID: String?
+    public var conversationID: String
+    public var roomID: String
+    public var occurredAt: Date
+    public var actor: SpectraChatCallActor?
+    public var call: SpectraChatCallSummary
+    public var participants: [SpectraChatCallParticipant]
+    public var trace: SpectraChatCallTrace?
+
+    /// Chat socket call events intentionally carry lifecycle references only.
+    /// Media transport credentials such as WebRTC SDP/ICE, LiveKit participant tokens,
+    /// TURN credentials, RTP data, and provider secrets must be fetched through CallSDK/Call API.
+    public var carriesMediaTransportCredential: Bool { false }
+
+    enum CodingKeys: String, CodingKey {
+        case eventID = "event_id"
+        case eventType = "event_type"
+        case eventVersion = "event_version"
+        case projectID = "project_id"
+        case conversationID = "conversation_id"
+        case roomID = "room_id"
+        case occurredAt = "occurred_at"
+        case actor
+        case call
+        case participant
+        case participants
+        case trace
+    }
+
+    public init(
+        eventID: String,
+        eventType: SpectraChatCallEventType,
+        eventVersion: String? = nil,
+        projectID: String? = nil,
+        conversationID: String,
+        roomID: String,
+        occurredAt: Date,
+        actor: SpectraChatCallActor? = nil,
+        call: SpectraChatCallSummary,
+        participants: [SpectraChatCallParticipant] = [],
+        trace: SpectraChatCallTrace? = nil
+    ) {
+        self.eventID = eventID
+        self.eventType = eventType
+        self.eventVersion = eventVersion
+        self.projectID = projectID
+        self.conversationID = conversationID
+        self.roomID = roomID
+        self.occurredAt = occurredAt
+        self.actor = actor
+        self.call = call
+        self.participants = participants
+        self.trace = trace
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        eventID = try container.decode(String.self, forKey: .eventID)
+        eventType = try container.decode(SpectraChatCallEventType.self, forKey: .eventType)
+        eventVersion = try container.decodeIfPresent(String.self, forKey: .eventVersion)
+        projectID = try container.decodeIfPresent(String.self, forKey: .projectID)
+        conversationID = try container.decode(String.self, forKey: .conversationID)
+        roomID = try container.decode(String.self, forKey: .roomID)
+        occurredAt = try Self.decodeDate(container, forKey: .occurredAt)
+        actor = try container.decodeIfPresent(SpectraChatCallActor.self, forKey: .actor)
+        call = try container.decode(SpectraChatCallSummary.self, forKey: .call)
+        if let participants = try container.decodeIfPresent(
+            [SpectraChatCallParticipant].self,
+            forKey: .participants
+        ) {
+            self.participants = participants
+        } else if let participant = try container.decodeIfPresent(
+            SpectraChatCallParticipant.self,
+            forKey: .participant
+        ) {
+            self.participants = [participant]
+        } else {
+            self.participants = []
+        }
+        trace = try container.decodeIfPresent(SpectraChatCallTrace.self, forKey: .trace)
+    }
+
+    public static func decode(from data: Data) throws -> SpectraChatCallLifecycleEvent {
+        try JSONDecoder.spectraChatDecoder.decode(SpectraChatCallLifecycleEvent.self, from: data)
+    }
+
+    private static func decodeDate(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        forKey key: CodingKeys
+    ) throws -> Date {
+        let rawValue = try container.decode(String.self, forKey: key)
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: rawValue) {
+            return date
+        }
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
+        if let date = standard.date(from: rawValue) {
+            return date
+        }
+        throw DecodingError.dataCorruptedError(
+            forKey: key,
+            in: container,
+            debugDescription: "Invalid ISO8601 date: \(rawValue)"
+        )
+    }
+}
+
 public struct SpectraChatCreateRoomRequest: Codable, Equatable, Sendable {
     public var kind: String
     public var title: String?

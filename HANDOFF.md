@@ -15,6 +15,8 @@
 - SDK의 REST `sendMessage`는 server-side message transaction과 notification outbox trigger를 기대한다. SDK가 APNs/FCM을 직접 호출하지 않는다.
 - WebSocket 실시간 전송은 `/v1/socket`과 `message.send`, `read_cursor.update` command envelope를 따른다.
 - WebSocket runtime은 아직 SDK가 직접 소유하지 않고, 앱이 `socketRequest()`로 생성한 authenticated `URLRequest`를 transport에 연결한다.
+- Call over Chat socket은 lifecycle event만 decode한다. 지원 event는 `call.invited`, `call.accepted`, `call.declined`, `call.joined`, `call.left`, `call.ended`, `call.missed`이며 iOS CallKit·LiveKit 연결은 앱/CallSDK가 담당한다.
+- Chat socket call payload에는 WebRTC SDP/ICE, LiveKit participant token, TURN credential, RTP data, provider secret을 실어서는 안 된다.
 - ChatSDK는 push notification을 직접 발송하지 않는다. message transaction 뒤 수신자별 notification request outbox와 Notification consumer가 담당한다.
 - Storage 첨부는 Storage SDK에 직접 의존하지 않고 `SpectraChatStorageObjectReference` 값 타입으로 경계를 둔다.
 - Swift Package Manager 배포는 Git URL 기반으로 시작한다. repository URL은 `https://github.com/Spectra-Platform/chat-sdk-ios.git`, product 이름은 `SpectraChatSDK`다.
@@ -40,8 +42,14 @@
   - `SpectraChatCommandEnvelope`
   - `SpectraChatSendMessage`
   - `SpectraChatReadCursorUpdate`
+  - `SpectraChatCallLifecycleEvent`
+  - `SpectraChatCallEventType`
+  - `SpectraChatCallActor`
+  - `SpectraChatCallSummary`
+  - `SpectraChatCallParticipant`
+  - `SpectraChatCallTrace`
   - `SpectraChatError`
-- Unit test는 bearer/project/idempotency header, REST path/query/body, send message decode, history decode, media read URL, socket request, command envelope와 error decode를 검증한다.
+- Unit test는 bearer/project/idempotency header, REST path/query/body, send message decode, history decode, media read URL, socket request, command envelope, call lifecycle event decode와 error decode를 검증한다.
 - iOS 앱 통합 기준 문서는 `docs/guides/ios-chat-sdk-integration.md`에 둔다.
 - SwiftPM 릴리즈 기준은 `docs/guides/release-checklist.md`에 둔다.
 
@@ -56,7 +64,7 @@
 ## 남은 작업과 미확정 항목
 
 - URLSessionWebSocketTask 기반 reconnect/runtime transport
-- server event decoding convenience
+- non-call server event decoding convenience
 - rich media upload flow와 Storage SDK object reference 연결
 - 실제 Spectra iOS 앱 integration
 - 실제 message send → Notification push 기기 수신 E2E

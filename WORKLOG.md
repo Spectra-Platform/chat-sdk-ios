@@ -1,5 +1,16 @@
 # WORKLOG — chat-sdk-ios
 
+## 2026-07-25 — Call lifecycle event decoder for Chat socket
+
+- 상태: 완료
+- 목적: Call Platform이 Chat socket을 lifecycle fan-out 경로로 사용할 수 있도록 iOS ChatSDK에 call lifecycle event decoder를 추가한다.
+- 주요 변경 영역:
+  - `call.invited`, `call.accepted`, `call.declined`, `call.joined`, `call.left`, `call.ended`, `call.missed` event type 추가
+  - call summary, actor, participant, trace payload decoder 추가
+  - Chat socket payload가 media transport credential을 소유하지 않는 경계 문서화
+- 검증 상태: `swift test` 10 tests, `git diff --check` 통과
+- 상세 기록: [`docs/work-logs/2026-07-25-02-call-lifecycle-event-decoder.md`](docs/work-logs/2026-07-25-02-call-lifecycle-event-decoder.md)
+
 ## 2026-07-25 — Platform Chat SDK boundary refinement
 
 - 상태: 완료
