@@ -29,6 +29,10 @@ Swift Package 기반의 Spectra Platform Chat iOS SDK다. AuthSDK에서 받은 a
   - `SpectraChatStorageObjectReference`를 메시지 content에 첨부 가능
   - StorageSDK를 사용해 이미지/파일/음성 업로드 후 메시지를 보내는
     `SpectraChatStorageAttachmentSender` 제공
+- Offline/local state support:
+  - `SpectraChatMessagePaginator`
+  - `SpectraChatInMemoryStore`
+  - `SpectraChatOfflineSendQueue`
 
 ChatSDK는 Notification push를 직접 발송하지 않는다. 메시지 저장 후 push 요청은 Chat 서버의 durable outbox와 Notification/Delivery consumer가 담당한다.
 ChatSDK의 call lifecycle decoder는 CallKit 또는 LiveKit token을 직접 다루지 않는다. Chat socket payload에는 통화 상태 참조만 있고, WebRTC SDP/ICE, LiveKit participant token, TURN credential과 provider secret은 Call API/CallSDK에서 받아야 한다.
@@ -152,6 +156,38 @@ try await attachmentSender.sendImageMessage(
 )
 ```
 
+SDK가 소켓과 REST를 소유하더라도 앱 화면은 로컬 cache와 pending queue가 필요하다.
+네트워크 실패 시에는 message draft를 queue에 넣고, 연결이 복구되면 flush한다.
+
+```swift
+let store = SpectraChatInMemoryStore()
+let queue = SpectraChatOfflineSendQueue()
+
+await store.upsertMessages(try await chat.listMessages(roomID: "room_123"))
+
+await queue.enqueue(
+    roomID: "room_123",
+    content: SpectraChatSendContent(kind: "text", text: "나중에 전송"),
+    clientMessageID: UUID().uuidString
+)
+
+let flushResult = await queue.flush(using: chat)
+await store.upsertMessages(flushResult.sentMessages)
+```
+
+이전 메시지 pagination은 상태 객체가 `before_sequence`를 관리한다.
+
+```swift
+let paginator = SpectraChatMessagePaginator(
+    client: chat,
+    roomID: "room_123",
+    limit: 30
+)
+
+let page = try await paginator.loadNextPage()
+await store.upsertMessages(page.messages)
+```
+
 ## 로컬 검증
 
 ```bash
@@ -162,6 +198,6 @@ swift test
 ## 현재 미완료 경계
 
 - 실제 네트워크 reconnect/backoff UX를 앱 화면 정책에 맞춰 더 세밀화
-- offline pending queue, local message cache와 gap recovery policy
+- durable disk cache와 gap recovery policy
 - 실제 Spectra iOS 앱 integration
 - 실제 message send → Chat outbox → Notification push 기기 수신 E2E
