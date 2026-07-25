@@ -658,6 +658,68 @@ final class SpectraChatClientTests: XCTestCase {
         XCTAssertFalse(event.carriesMediaTransportCredential)
     }
 
+    func testRealtimeCallInvitedDecodesTopLevelCallParticipants() throws {
+        let data = Data(
+            """
+            {
+              "schema_version": 1,
+              "event_id": "evt_call_123_invited",
+              "event_type": "call.invited",
+              "room_id": "conv_123",
+              "server_sequence": 44,
+              "occurred_at": "2026-07-26T04:00:00Z",
+              "actor_user_id": "app_user_123",
+              "call": {
+                "call_id": "call_123",
+                "chat_room_id": "conv_123",
+                "kind": "direct",
+                "state": "ringing",
+                "initiator_user_id": "app_user_123",
+                "max_participants": 2,
+                "connected_participant_count": 0,
+                "participants": [
+                  {
+                    "user_id": "app_user_123",
+                    "role": "host",
+                    "state": "pending",
+                    "joined_at": null,
+                    "left_at": null,
+                    "leave_reason": null
+                  },
+                  {
+                    "user_id": "app_user_456",
+                    "role": "participant",
+                    "state": "pending",
+                    "joined_at": null,
+                    "left_at": null,
+                    "leave_reason": null
+                  }
+                ],
+                "version": 1,
+                "created_at": "2026-07-26T04:00:00Z",
+                "activated_at": null,
+                "ended_at": null,
+                "end_reason": null
+              }
+            }
+            """.utf8
+        )
+
+        let decoded = try SpectraChatRealtimeClient.decodeEvent(from: data)
+
+        guard case .callLifecycle(let event) = decoded else {
+            XCTFail("Expected call lifecycle event")
+            return
+        }
+        XCTAssertEqual(event.eventType, .invited)
+        XCTAssertEqual(event.conversationID, "conv_123")
+        XCTAssertEqual(event.roomID, "conv_123")
+        XCTAssertEqual(event.call.status, "ringing")
+        XCTAssertEqual(event.call.callType, "direct")
+        XCTAssertEqual(event.participants.map(\.appUserID), ["app_user_123", "app_user_456"])
+        XCTAssertEqual(event.participants.map(\.state), ["pending", "pending"])
+    }
+
     func testRealtimeCallStateUpdatedDecodesCommunityEnvelopePayload() throws {
         let data = Data(
             """

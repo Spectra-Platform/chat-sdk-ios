@@ -558,6 +558,7 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
         projectID = try container.decodeIfPresent(String.self, forKey: .projectID)
         serverSequence = try container.decodeIfPresent(Int64.self, forKey: .serverSequence) ?? 0
         occurredAt = try Self.decodeDate(container, forKey: .occurredAt)
+        let topLevelCall = try container.decodeIfPresent(CallLifecycleSocketCall.self, forKey: .call)
         let envelopePayload = try container.decodeIfPresent(CallLifecycleSocketPayload.self, forKey: .payload)
 
         actor = try container.decodeIfPresent(SpectraChatCallActor.self, forKey: .actor)
@@ -566,7 +567,7 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
             ?? Self.actor(from: envelopePayload?.actorUserID)
         changeType = try container.decodeIfPresent(String.self, forKey: .changeType)
             ?? envelopePayload?.changeType
-        call = try container.decodeIfPresent(SpectraChatCallSummary.self, forKey: .call)
+        call = try topLevelCall?.summary
             ?? envelopePayload?.call.summary
             ?? {
                 throw DecodingError.keyNotFound(
@@ -579,15 +580,21 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
             }()
         conversationID = try container.decodeIfPresent(String.self, forKey: .conversationID)
             ?? container.decodeIfPresent(String.self, forKey: .roomID)
+            ?? topLevelCall?.chatRoomID
             ?? envelopePayload?.call.chatRoomID
             ?? call.callID
         roomID = try container.decodeIfPresent(String.self, forKey: .roomID)
+            ?? topLevelCall?.chatRoomID
             ?? envelopePayload?.call.chatRoomID
             ?? conversationID
 
         if let participants = try container.decodeIfPresent([SpectraChatCallParticipant].self, forKey: .participants) {
             self.participants = participants
         } else if let participant = try container.decodeIfPresent(SpectraChatCallParticipant.self, forKey: .participant) {
+            self.participants = [participant]
+        } else if let participants = topLevelCall?.participants {
+            self.participants = participants
+        } else if let participant = topLevelCall?.participant {
             self.participants = [participant]
         } else if let participants = envelopePayload?.call.participants {
             self.participants = participants
