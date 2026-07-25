@@ -35,4 +35,4 @@ Spectra 앱이 ChatSDK-owned WebSocket runtime을 실제 socket adapter로 사�
 
 ## 커밋 기록
 
-- 예정: `feat: expose call lifecycle server sequence`
+- `f66de48 feat: expose call lifecycle server sequence`
