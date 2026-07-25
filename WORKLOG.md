@@ -1,5 +1,16 @@
 # WORKLOG — chat-sdk-ios
 
+## 2026-07-25 — Storage object references in received content
+
+- 상태: 완료
+- 목적: StorageSDK로 업로드한 첨부를 ChatSDK send path뿐 아니라 history/send 응답에서도 보존할 수 있게 한다.
+- 주요 변경 영역:
+  - `SpectraChatContent.storageObjectReferences` 추가
+  - `storage_object_references` decode 회귀 테스트 추가
+  - Storage 첨부 value type 경계 문서화
+- 검증 상태: `swift test` 11 tests, `git diff --check` 통과
+- 상세 기록: [`docs/work-logs/2026-07-25-03-storage-object-references-in-content.md`](docs/work-logs/2026-07-25-03-storage-object-references-in-content.md)
+
 ## 2026-07-25 — Call lifecycle event decoder for Chat socket
 
 - 상태: 완료

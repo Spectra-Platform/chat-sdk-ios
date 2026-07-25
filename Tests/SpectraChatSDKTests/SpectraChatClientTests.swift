@@ -89,6 +89,60 @@ final class SpectraChatClientTests: XCTestCase {
         XCTAssertEqual(messages.first?.content.text, "hello")
     }
 
+    func testListMessagesDecodesStorageObjectReferences() async throws {
+        let client = makeClient()
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/v1/chat/rooms/room_123/messages")
+            return jsonResponse(
+                status: 200,
+                body: """
+                {
+                  "data": {
+                    "messages": [
+                      {
+                        "message_id": "msg_storage_123",
+                        "room_id": "room_123",
+                        "server_sequence": 11,
+                        "client_message_id": "client_storage_123",
+                        "sender_user_id": "usr_a",
+                        "content": {
+                          "kind": "image",
+                          "text": "사진",
+                          "media_items": [],
+                          "storage_object_references": [
+                            {
+                              "object_key": "/chat/media/object_123.jpg",
+                              "content_type": "image/jpeg",
+                              "byte_size": 1234,
+                              "checksum_sha256": "checksum",
+                              "metadata": {"spectra_purpose": "chat_image"}
+                            }
+                          ]
+                        },
+                        "reply_to_message_id": null,
+                        "mentioned_user_ids": [],
+                        "created_at": "2026-07-24T01:02:00Z",
+                        "edited_at": null,
+                        "deleted_at": null
+                      }
+                    ]
+                  }
+                }
+                """
+            )
+        }
+
+        let messages = try await client.listMessages(roomID: "room_123")
+        let reference = try XCTUnwrap(messages.first?.content.storageObjectReferences?.first)
+
+        XCTAssertEqual(reference.objectKey, "/chat/media/object_123.jpg")
+        XCTAssertEqual(reference.contentType, "image/jpeg")
+        XCTAssertEqual(reference.byteSize, 1234)
+        XCTAssertEqual(reference.checksumSHA256, "checksum")
+        XCTAssertEqual(reference.metadata["spectra_purpose"], "chat_image")
+    }
+
     func testCreateDirectRoomSendsParticipant() async throws {
         let client = makeClient()
         MockURLProtocol.handler = { request in

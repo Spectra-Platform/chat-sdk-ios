@@ -18,7 +18,7 @@
 - Call over Chat socket은 lifecycle event만 decode한다. 지원 event는 `call.invited`, `call.accepted`, `call.declined`, `call.joined`, `call.left`, `call.ended`, `call.missed`이며 iOS CallKit·LiveKit 연결은 앱/CallSDK가 담당한다.
 - Chat socket call payload에는 WebRTC SDP/ICE, LiveKit participant token, TURN credential, RTP data, provider secret을 실어서는 안 된다.
 - ChatSDK는 push notification을 직접 발송하지 않는다. message transaction 뒤 수신자별 notification request outbox와 Notification consumer가 담당한다.
-- Storage 첨부는 Storage SDK에 직접 의존하지 않고 `SpectraChatStorageObjectReference` 값 타입으로 경계를 둔다.
+- Storage 첨부는 Storage SDK에 직접 의존하지 않고 `SpectraChatStorageObjectReference` 값 타입으로 경계를 둔다. `SpectraChatSendContent`와 `SpectraChatContent` 모두 `storage_object_references`를 보존해, 송신 payload와 history 응답이 같은 storage reference 경계를 유지한다.
 - Swift Package Manager 배포는 Git URL 기반으로 시작한다. repository URL은 `https://github.com/Spectra-Platform/chat-sdk-ios.git`, product 이름은 `SpectraChatSDK`다.
 - release tag는 `vMAJOR.MINOR.PATCH` 형식으로 만들며, 최초 tag는 공개 버전 번호를 확정한 뒤 생성한다.
 
@@ -65,7 +65,7 @@
 
 - URLSessionWebSocketTask 기반 reconnect/runtime transport
 - non-call server event decoding convenience
-- rich media upload flow와 Storage SDK object reference 연결
+- iOS 앱의 rich media upload flow와 Storage SDK object reference 연결
 - 실제 Spectra iOS 앱 integration
 - 실제 message send → Notification push 기기 수신 E2E
 

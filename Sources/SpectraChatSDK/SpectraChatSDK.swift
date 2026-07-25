@@ -82,17 +82,25 @@ public struct SpectraChatContent: Codable, Equatable, Sendable {
     public var kind: String
     public var text: String?
     public var mediaItems: [SpectraChatMediaItem]
+    public var storageObjectReferences: [SpectraChatStorageObjectReference]?
 
-    public init(kind: String, text: String? = nil, mediaItems: [SpectraChatMediaItem] = []) {
+    public init(
+        kind: String,
+        text: String? = nil,
+        mediaItems: [SpectraChatMediaItem] = [],
+        storageObjectReferences: [SpectraChatStorageObjectReference]? = nil
+    ) {
         self.kind = kind
         self.text = text
         self.mediaItems = mediaItems
+        self.storageObjectReferences = storageObjectReferences
     }
 
     enum CodingKeys: String, CodingKey {
         case kind
         case text
         case mediaItems = "media_items"
+        case storageObjectReferences = "storage_object_references"
     }
 }
 
