@@ -15,7 +15,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/Spectra-Platform/storage-sdk-ios.git", branch: "main"),
+        .package(url: "https://github.com/Spectra-Platform/storage-sdk-ios.git", .upToNextMinor(from: "0.1.1")),
     ],
     targets: [
         .target(
