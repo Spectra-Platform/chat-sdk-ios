@@ -18,10 +18,12 @@ public struct StaticSpectraChatAccessTokenProvider: SpectraChatAccessTokenProvid
 
 public struct SpectraChatClientConfiguration: Sendable {
     public var baseURL: URL
+    public var socketURL: URL?
     public var projectId: String?
 
-    public init(baseURL: URL, projectId: String? = nil) {
+    public init(baseURL: URL, socketURL: URL? = nil, projectId: String? = nil) {
         self.baseURL = baseURL
+        self.socketURL = socketURL
         self.projectId = projectId
     }
 }
@@ -772,6 +774,9 @@ public final class SpectraChatClient: @unchecked Sendable {
     }
 
     public func socketURL() throws -> URL {
+        if let socketURL = configuration.socketURL {
+            return socketURL
+        }
         guard var components = URLComponents(url: configuration.baseURL, resolvingAgainstBaseURL: false) else {
             throw SpectraChatError.invalidBaseURL
         }

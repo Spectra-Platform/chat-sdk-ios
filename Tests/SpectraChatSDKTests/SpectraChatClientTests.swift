@@ -351,6 +351,21 @@ final class SpectraChatClientTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer chat_access_token")
     }
 
+    func testSocketRequestUsesExplicitSocketURLWhenConfigured() async throws {
+        let client = makeClient(
+            baseURL: URL(string: "https://chat.example.test/api")!,
+            socketURL: URL(string: "ws://192.168.200.113:8080/v1/socket")!,
+            projectId: "project_123"
+        )
+
+        let request = try await client.socketRequest()
+
+        XCTAssertEqual(request.url?.absoluteString, "ws://192.168.200.113:8080/v1/socket")
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer chat_access_token")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "X-Spectra-Project-Id"), "project_123")
+    }
+
     func testTypingCommandMatchesSocketContract() throws {
         let client = makeClient()
 
@@ -610,13 +625,18 @@ final class SpectraChatClientTests: XCTestCase {
 
     private func makeClient(
         baseURL: URL = URL(string: "https://chat.example.test")!,
+        socketURL: URL? = nil,
         projectId: String? = nil
     ) -> SpectraChatClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockURLProtocol.self]
         let session = URLSession(configuration: configuration)
         return SpectraChatClient(
-            configuration: SpectraChatClientConfiguration(baseURL: baseURL, projectId: projectId),
+            configuration: SpectraChatClientConfiguration(
+                baseURL: baseURL,
+                socketURL: socketURL,
+                projectId: projectId
+            ),
             tokenProvider: StaticSpectraChatAccessTokenProvider(token: "chat_access_token"),
             urlSession: session
         )
