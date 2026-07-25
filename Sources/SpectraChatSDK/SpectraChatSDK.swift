@@ -443,6 +443,7 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
     public var projectID: String?
     public var conversationID: String
     public var roomID: String
+    public var serverSequence: Int64
     public var occurredAt: Date
     public var actor: SpectraChatCallActor?
     public var call: SpectraChatCallSummary
@@ -461,6 +462,7 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
         case projectID = "project_id"
         case conversationID = "conversation_id"
         case roomID = "room_id"
+        case serverSequence = "server_sequence"
         case occurredAt = "occurred_at"
         case actor
         case call
@@ -476,6 +478,7 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
         projectID: String? = nil,
         conversationID: String,
         roomID: String,
+        serverSequence: Int64 = 0,
         occurredAt: Date,
         actor: SpectraChatCallActor? = nil,
         call: SpectraChatCallSummary,
@@ -488,6 +491,7 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
         self.projectID = projectID
         self.conversationID = conversationID
         self.roomID = roomID
+        self.serverSequence = serverSequence
         self.occurredAt = occurredAt
         self.actor = actor
         self.call = call
@@ -503,6 +507,7 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
         projectID = try container.decodeIfPresent(String.self, forKey: .projectID)
         conversationID = try container.decode(String.self, forKey: .conversationID)
         roomID = try container.decode(String.self, forKey: .roomID)
+        serverSequence = try container.decodeIfPresent(Int64.self, forKey: .serverSequence) ?? 0
         occurredAt = try Self.decodeDate(container, forKey: .occurredAt)
         actor = try container.decodeIfPresent(SpectraChatCallActor.self, forKey: .actor)
         call = try container.decode(SpectraChatCallSummary.self, forKey: .call)

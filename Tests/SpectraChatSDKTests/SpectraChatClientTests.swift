@@ -404,6 +404,7 @@ final class SpectraChatClientTests: XCTestCase {
               "project_id": "proj_123",
               "conversation_id": "conv_123",
               "room_id": "room_123",
+              "server_sequence": 42,
               "occurred_at": "2026-07-25T00:00:00Z",
               "actor": {
                 "app_user_id": "app_user_123"
@@ -440,6 +441,7 @@ final class SpectraChatClientTests: XCTestCase {
         XCTAssertEqual(event.eventType, .invited)
         XCTAssertEqual(event.conversationID, "conv_123")
         XCTAssertEqual(event.roomID, "room_123")
+        XCTAssertEqual(event.serverSequence, 42)
         XCTAssertEqual(event.call.mediaMode, "video")
         XCTAssertEqual(event.participants.map(\.state), ["accepted", "invited"])
         XCTAssertFalse(event.carriesMediaTransportCredential)
@@ -454,6 +456,7 @@ final class SpectraChatClientTests: XCTestCase {
               "event_version": "2026-07-25",
               "conversation_id": "conv_123",
               "room_id": "room_123",
+              "server_sequence": 43,
               "occurred_at": "2026-07-25T00:00:03Z",
               "actor": {
                 "app_user_id": "app_user_456"
@@ -476,6 +479,7 @@ final class SpectraChatClientTests: XCTestCase {
         let event = try SpectraChatCallLifecycleEvent.decode(from: data)
 
         XCTAssertEqual(event.eventType, .accepted)
+        XCTAssertEqual(event.serverSequence, 43)
         XCTAssertEqual(event.participants, [
             SpectraChatCallParticipant(
                 participantID: "call_participant_456",

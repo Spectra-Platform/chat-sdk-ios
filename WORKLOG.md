@@ -1,5 +1,15 @@
 # WORKLOG — chat-sdk-ios
 
+## 2026-07-25 — Call lifecycle server sequence exposure
+
+- 상태: 완료
+- 목적: SDK-owned realtime event를 앱의 재연결 gap 복구 cursor에 그대로 연결할 수 있도록 Call lifecycle event의 `server_sequence`를 public model에 노출한다.
+- 주요 변경 영역:
+  - `SpectraChatCallLifecycleEvent.serverSequence` 추가
+  - singular/plural participant call lifecycle fixture의 server sequence decode 회귀 테스트 추가
+- 검증 상태: `swift test` 15 tests, `git diff --check` 통과
+- 상세 기록: [`docs/work-logs/2026-07-25-05-call-lifecycle-server-sequence.md`](docs/work-logs/2026-07-25-05-call-lifecycle-server-sequence.md)
+
 ## 2026-07-25 — SDK-owned WebSocket realtime runtime
 
 - 상태: 완료

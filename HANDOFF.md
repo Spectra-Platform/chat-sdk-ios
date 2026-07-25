@@ -15,6 +15,7 @@
 - SDK의 REST `sendMessage`는 server-side message transaction과 notification outbox trigger를 기대한다. SDK가 APNs/FCM을 직접 호출하지 않는다.
 - WebSocket 실시간 전송은 `/v1/socket`과 `message.send`, `typing.set`, `read_cursor.update` command envelope를 따른다.
 - WebSocket runtime은 SDK가 소유한다. `SpectraChatRealtimeClient`가 authenticated request 생성, `URLSessionWebSocketTask` 연결, receive loop, event stream, command 송신과 기본 reconnect 상태를 제공한다.
+- Call lifecycle realtime event는 `server_sequence`를 public `SpectraChatCallLifecycleEvent.serverSequence`로 노출한다. 앱 consumer는 이 값을 재연결 gap 복구 cursor와 중복 제거에 사용한다.
 - Call over Chat socket은 lifecycle event만 decode한다. 지원 event는 `call.invited`, `call.accepted`, `call.declined`, `call.joined`, `call.left`, `call.ended`, `call.missed`이며 iOS CallKit·LiveKit 연결은 앱/CallSDK가 담당한다.
 - Chat socket call payload에는 WebRTC SDP/ICE, LiveKit participant token, TURN credential, RTP data, provider secret을 실어서는 안 된다.
 - ChatSDK는 push notification을 직접 발송하지 않는다. message transaction 뒤 수신자별 notification request outbox와 Notification consumer가 담당한다.
