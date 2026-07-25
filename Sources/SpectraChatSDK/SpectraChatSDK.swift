@@ -345,6 +345,7 @@ public enum SpectraChatRealtimeError: Error, Equatable, Sendable {
 
 public enum SpectraChatCallEventType: String, CaseIterable, Codable, Sendable {
     case invited = "call.invited"
+    case stateUpdated = "call.state_updated"
     case accepted = "call.accepted"
     case declined = "call.declined"
     case joined = "call.joined"
@@ -395,9 +396,35 @@ public struct SpectraChatCallSummary: Codable, Equatable, Sendable {
         case callID = "call_id"
         case callSessionID = "call_session_id"
         case status
+        case state
         case mediaMode = "media_mode"
         case callType = "call_type"
+        case kind
         case endedReason = "ended_reason"
+        case endReason = "end_reason"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        callID = try container.decode(String.self, forKey: .callID)
+        callSessionID = try container.decodeIfPresent(String.self, forKey: .callSessionID)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+            ?? container.decode(String.self, forKey: .state)
+        mediaMode = try container.decodeIfPresent(String.self, forKey: .mediaMode) ?? "video"
+        callType = try container.decodeIfPresent(String.self, forKey: .callType)
+            ?? container.decode(String.self, forKey: .kind)
+        endedReason = try container.decodeIfPresent(String.self, forKey: .endedReason)
+            ?? container.decodeIfPresent(String.self, forKey: .endReason)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(callID, forKey: .callID)
+        try container.encodeIfPresent(callSessionID, forKey: .callSessionID)
+        try container.encode(status, forKey: .status)
+        try container.encode(mediaMode, forKey: .mediaMode)
+        try container.encode(callType, forKey: .callType)
+        try container.encodeIfPresent(endedReason, forKey: .endedReason)
     }
 }
 
@@ -419,7 +446,23 @@ public struct SpectraChatCallParticipant: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case participantID = "participant_id"
         case appUserID = "app_user_id"
+        case userID = "user_id"
         case state
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        participantID = try container.decodeIfPresent(String.self, forKey: .participantID)
+        appUserID = try container.decodeIfPresent(String.self, forKey: .appUserID)
+            ?? container.decode(String.self, forKey: .userID)
+        state = try container.decode(String.self, forKey: .state)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(participantID, forKey: .participantID)
+        try container.encode(appUserID, forKey: .appUserID)
+        try container.encode(state, forKey: .state)
     }
 }
 
@@ -448,6 +491,7 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
     public var serverSequence: Int64
     public var occurredAt: Date
     public var actor: SpectraChatCallActor?
+    public var changeType: String?
     public var call: SpectraChatCallSummary
     public var participants: [SpectraChatCallParticipant]
     public var trace: SpectraChatCallTrace?
@@ -467,10 +511,13 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
         case serverSequence = "server_sequence"
         case occurredAt = "occurred_at"
         case actor
+        case actorUserID = "actor_user_id"
+        case changeType = "change_type"
         case call
         case participant
         case participants
         case trace
+        case payload
     }
 
     public init(
@@ -483,6 +530,7 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
         serverSequence: Int64 = 0,
         occurredAt: Date,
         actor: SpectraChatCallActor? = nil,
+        changeType: String? = nil,
         call: SpectraChatCallSummary,
         participants: [SpectraChatCallParticipant] = [],
         trace: SpectraChatCallTrace? = nil
@@ -496,6 +544,7 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
         self.serverSequence = serverSequence
         self.occurredAt = occurredAt
         self.actor = actor
+        self.changeType = changeType
         self.call = call
         self.participants = participants
         self.trace = trace
@@ -507,26 +556,50 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
         eventType = try container.decode(SpectraChatCallEventType.self, forKey: .eventType)
         eventVersion = try container.decodeIfPresent(String.self, forKey: .eventVersion)
         projectID = try container.decodeIfPresent(String.self, forKey: .projectID)
-        conversationID = try container.decode(String.self, forKey: .conversationID)
-        roomID = try container.decode(String.self, forKey: .roomID)
         serverSequence = try container.decodeIfPresent(Int64.self, forKey: .serverSequence) ?? 0
         occurredAt = try Self.decodeDate(container, forKey: .occurredAt)
+        let envelopePayload = try container.decodeIfPresent(CallLifecycleSocketPayload.self, forKey: .payload)
+
         actor = try container.decodeIfPresent(SpectraChatCallActor.self, forKey: .actor)
-        call = try container.decode(SpectraChatCallSummary.self, forKey: .call)
-        if let participants = try container.decodeIfPresent(
-            [SpectraChatCallParticipant].self,
-            forKey: .participants
-        ) {
+            ?? envelopePayload?.actor
+            ?? Self.actor(from: try container.decodeIfPresent(String.self, forKey: .actorUserID))
+            ?? Self.actor(from: envelopePayload?.actorUserID)
+        changeType = try container.decodeIfPresent(String.self, forKey: .changeType)
+            ?? envelopePayload?.changeType
+        call = try container.decodeIfPresent(SpectraChatCallSummary.self, forKey: .call)
+            ?? envelopePayload?.call.summary
+            ?? {
+                throw DecodingError.keyNotFound(
+                    CodingKeys.call,
+                    DecodingError.Context(
+                        codingPath: container.codingPath,
+                        debugDescription: "Expected call payload at top-level call or payload.call"
+                    )
+                )
+            }()
+        conversationID = try container.decodeIfPresent(String.self, forKey: .conversationID)
+            ?? container.decodeIfPresent(String.self, forKey: .roomID)
+            ?? envelopePayload?.call.chatRoomID
+            ?? call.callID
+        roomID = try container.decodeIfPresent(String.self, forKey: .roomID)
+            ?? envelopePayload?.call.chatRoomID
+            ?? conversationID
+
+        if let participants = try container.decodeIfPresent([SpectraChatCallParticipant].self, forKey: .participants) {
             self.participants = participants
-        } else if let participant = try container.decodeIfPresent(
-            SpectraChatCallParticipant.self,
-            forKey: .participant
-        ) {
+        } else if let participant = try container.decodeIfPresent(SpectraChatCallParticipant.self, forKey: .participant) {
+            self.participants = [participant]
+        } else if let participants = envelopePayload?.call.participants {
+            self.participants = participants
+        } else if let participants = envelopePayload?.participants {
+            self.participants = participants
+        } else if let participant = envelopePayload?.participant {
             self.participants = [participant]
         } else {
             self.participants = []
         }
         trace = try container.decodeIfPresent(SpectraChatCallTrace.self, forKey: .trace)
+            ?? envelopePayload?.trace
     }
 
     public static func decode(from data: Data) throws -> SpectraChatCallLifecycleEvent {
@@ -553,6 +626,60 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
             in: container,
             debugDescription: "Invalid ISO8601 date: \(rawValue)"
         )
+    }
+
+    private static func actor(from appUserID: String?) -> SpectraChatCallActor? {
+        guard let appUserID else { return nil }
+        return SpectraChatCallActor(appUserID: appUserID)
+    }
+}
+
+private struct CallLifecycleSocketPayload: Decodable {
+    var actor: SpectraChatCallActor?
+    var actorUserID: String?
+    var changeType: String?
+    var call: CallLifecycleSocketCall
+    var participants: [SpectraChatCallParticipant]?
+    var participant: SpectraChatCallParticipant?
+    var trace: SpectraChatCallTrace?
+
+    enum CodingKeys: String, CodingKey {
+        case actor
+        case actorUserID = "actor_user_id"
+        case changeType = "change_type"
+        case call
+        case participants
+        case participant
+        case trace
+    }
+}
+
+private struct CallLifecycleSocketCall: Decodable {
+    var summary: SpectraChatCallSummary
+    var chatRoomID: String?
+    var participants: [SpectraChatCallParticipant]?
+    var participant: SpectraChatCallParticipant?
+
+    enum CodingKeys: String, CodingKey {
+        case chatRoomID = "chat_room_id"
+        case participants
+        case participant
+    }
+
+    init(from decoder: Decoder) throws {
+        summary = try SpectraChatCallSummary(from: decoder)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        chatRoomID = try container.decodeIfPresent(String.self, forKey: .chatRoomID)
+        if let participants = try container.decodeIfPresent([SpectraChatCallParticipant].self, forKey: .participants) {
+            self.participants = participants
+            participant = nil
+        } else if let participant = try container.decodeIfPresent(SpectraChatCallParticipant.self, forKey: .participant) {
+            self.participants = nil
+            self.participant = participant
+        } else {
+            participants = nil
+            participant = nil
+        }
     }
 }
 
@@ -1067,6 +1194,7 @@ public actor SpectraChatRealtimeClient {
                 )
             )
         case "call.invited",
+             "call.state_updated",
              "call.accepted",
              "call.declined",
              "call.joined",

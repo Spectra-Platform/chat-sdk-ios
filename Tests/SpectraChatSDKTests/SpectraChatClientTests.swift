@@ -592,6 +592,135 @@ final class SpectraChatClientTests: XCTestCase {
         ])
     }
 
+    func testRealtimeCallInvitedDecodesCommunityEnvelopePayload() throws {
+        let data = Data(
+            """
+            {
+              "schema_version": 1,
+              "event_id": "evt_call_123_invited",
+              "event_type": "call.invited",
+              "room_id": "conv_123",
+              "server_sequence": 44,
+              "occurred_at": "2026-07-26T04:00:00Z",
+              "payload": {
+                "call": {
+                  "call_id": "call_123",
+                  "chat_room_id": "conv_123",
+                  "kind": "direct",
+                  "state": "ringing",
+                  "initiator_user_id": "app_user_123",
+                  "max_participants": 2,
+                  "connected_participant_count": 0,
+                  "participants": [
+                    {
+                      "user_id": "app_user_123",
+                      "role": "host",
+                      "state": "pending",
+                      "joined_at": null,
+                      "left_at": null,
+                      "leave_reason": null
+                    },
+                    {
+                      "user_id": "app_user_456",
+                      "role": "participant",
+                      "state": "pending",
+                      "joined_at": null,
+                      "left_at": null,
+                      "leave_reason": null
+                    }
+                  ],
+                  "version": 1,
+                  "created_at": "2026-07-26T04:00:00Z",
+                  "activated_at": null,
+                  "ended_at": null,
+                  "end_reason": null
+                }
+              }
+            }
+            """.utf8
+        )
+
+        let decoded = try SpectraChatRealtimeClient.decodeEvent(from: data)
+
+        guard case .callLifecycle(let event) = decoded else {
+            XCTFail("Expected call lifecycle event")
+            return
+        }
+        XCTAssertEqual(event.eventType, .invited)
+        XCTAssertEqual(event.conversationID, "conv_123")
+        XCTAssertEqual(event.roomID, "conv_123")
+        XCTAssertEqual(event.serverSequence, 44)
+        XCTAssertEqual(event.call.status, "ringing")
+        XCTAssertEqual(event.call.mediaMode, "video")
+        XCTAssertEqual(event.call.callType, "direct")
+        XCTAssertEqual(event.participants.map(\.appUserID), ["app_user_123", "app_user_456"])
+        XCTAssertEqual(event.participants.map(\.state), ["pending", "pending"])
+        XCTAssertFalse(event.carriesMediaTransportCredential)
+    }
+
+    func testRealtimeCallStateUpdatedDecodesCommunityEnvelopePayload() throws {
+        let data = Data(
+            """
+            {
+              "schema_version": 1,
+              "event_id": "evt_call_123_join",
+              "event_type": "call.state_updated",
+              "room_id": "conv_123",
+              "server_sequence": 45,
+              "occurred_at": "2026-07-26T04:00:05Z",
+              "payload": {
+                "change_type": "participant_connected",
+                "actor_user_id": "app_user_456",
+                "call": {
+                  "call_id": "call_123",
+                  "chat_room_id": "conv_123",
+                  "kind": "direct",
+                  "state": "active",
+                  "initiator_user_id": "app_user_123",
+                  "max_participants": 2,
+                  "connected_participant_count": 1,
+                  "participants": [
+                    {
+                      "user_id": "app_user_123",
+                      "role": "host",
+                      "state": "pending",
+                      "joined_at": null,
+                      "left_at": null,
+                      "leave_reason": null
+                    },
+                    {
+                      "user_id": "app_user_456",
+                      "role": "participant",
+                      "state": "connected",
+                      "joined_at": "2026-07-26T04:00:05Z",
+                      "left_at": null,
+                      "leave_reason": null
+                    }
+                  ],
+                  "version": 2,
+                  "created_at": "2026-07-26T04:00:00Z",
+                  "activated_at": "2026-07-26T04:00:05Z",
+                  "ended_at": null,
+                  "end_reason": null
+                }
+              }
+            }
+            """.utf8
+        )
+
+        let decoded = try SpectraChatRealtimeClient.decodeEvent(from: data)
+
+        guard case .callLifecycle(let event) = decoded else {
+            XCTFail("Expected call lifecycle event")
+            return
+        }
+        XCTAssertEqual(event.eventType, .stateUpdated)
+        XCTAssertEqual(event.changeType, "participant_connected")
+        XCTAssertEqual(event.actor?.appUserID, "app_user_456")
+        XCTAssertEqual(event.call.status, "active")
+        XCTAssertEqual(event.participants.last?.state, "connected")
+    }
+
     func testHTTPErrorDecodesChatError() async throws {
         let client = makeClient()
         MockURLProtocol.handler = { request in

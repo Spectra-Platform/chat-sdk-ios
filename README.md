@@ -6,7 +6,7 @@ Swift Package 기반의 Spectra Platform Chat iOS SDK다. AuthSDK에서 받은 a
 
 - Swift Package: `SpectraChatSDK`
 - Package URL: `https://github.com/Spectra-Platform/chat-sdk-ios.git`
-- Public configuration: `baseURL`, `projectId`
+- Public configuration: `baseURL`, `socketURL`, `projectId`
 - Public token provider: `SpectraChatAccessTokenProviding`
 - REST API:
   - `GET /v1/chat/rooms`
@@ -23,7 +23,7 @@ Swift Package 기반의 Spectra Platform Chat iOS SDK다. AuthSDK에서 받은 a
   - `events()` `AsyncStream<SpectraChatRealtimeEvent>`
   - `message.send`, `typing.set`, `read_cursor.update` command 송신
   - `message.created`, `read_cursor.updated`, `typing.updated`, server error decode
-  - `call.invited`/`call.accepted`/`call.declined`/`call.joined`/`call.left`/`call.ended`/`call.missed` lifecycle event decoding
+  - `call.invited`/`call.state_updated`/`call.accepted`/`call.declined`/`call.joined`/`call.left`/`call.ended`/`call.missed` lifecycle event decoding
   - 기본 reconnect 상태 이벤트
 - Attachment boundary:
   - `SpectraChatStorageObjectReference`를 메시지 content에 첨부 가능
@@ -35,7 +35,7 @@ Swift Package 기반의 Spectra Platform Chat iOS SDK다. AuthSDK에서 받은 a
   - `SpectraChatOfflineSendQueue`
 
 ChatSDK는 Notification push를 직접 발송하지 않는다. 메시지 저장 후 push 요청은 Chat 서버의 durable outbox와 Notification/Delivery consumer가 담당한다.
-ChatSDK의 call lifecycle decoder는 CallKit 또는 LiveKit token을 직접 다루지 않는다. Chat socket payload에는 통화 상태 참조만 있고, WebRTC SDP/ICE, LiveKit participant token, TURN credential과 provider secret은 Call API/CallSDK에서 받아야 한다.
+ChatSDK의 call lifecycle decoder는 CallKit 또는 LiveKit token을 직접 다루지 않는다. Chat socket payload에는 통화 상태 참조만 있고, WebRTC SDP/ICE, LiveKit participant token, TURN credential과 provider secret은 Call API/CallSDK에서 받아야 한다. Decoder는 기존 flattened event와 Community Chat socket envelope(`payload.call`, `payload.change_type`, `payload.actor_user_id`)를 모두 지원한다.
 
 ## 설치
 
