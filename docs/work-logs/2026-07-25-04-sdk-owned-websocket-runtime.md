@@ -37,4 +37,9 @@
 
 ## 커밋 기록
 
-- 예정: `feat: add SDK-owned chat realtime socket`
+- `b9b3271 feat: add SDK-owned chat realtime socket`
+  - `SpectraChatRealtimeClient` public actor 추가
+  - SDK-owned WebSocket 연결, receive loop, event stream, command 송신, 기본 reconnect 상태 추가
+  - message/read cursor/typing/server error/Call lifecycle event decode 추가
+  - README, HANDOFF, WORKLOG 갱신
+- release tag: `v0.1.2`
