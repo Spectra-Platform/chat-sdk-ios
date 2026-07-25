@@ -1,0 +1,14 @@
+{
+  "pins" : [
+    {
+      "identity" : "storage-sdk-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Spectra-Platform/storage-sdk-ios.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "2f195b0bacf97b3bd49b670c25563c6b4066c59e"
+      }
+    }
+  ],
+  "version" : 2
+}

@@ -1,4 +1,5 @@
 import Foundation
+import SpectraStorageSDK
 import XCTest
 @testable import SpectraChatSDK
 
@@ -198,6 +199,93 @@ final class SpectraChatClientTests: XCTestCase {
 
         XCTAssertEqual(message.messageID, "msg_123")
         XCTAssertEqual(message.content.text, "hello")
+    }
+
+    func testStorageAttachmentSenderUploadsImageThenSendsMessage() async throws {
+        let chat = makeClient(projectId: "project_123")
+        let storage = makeStorageClient()
+        let sender = SpectraChatStorageAttachmentSender(chat: chat, storage: storage)
+        var requestIndex = 0
+
+        MockURLProtocol.handler = { request in
+            defer { requestIndex += 1 }
+            switch requestIndex {
+            case 0:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer storage_access_token")
+                XCTAssertEqual(request.url?.path, "/platform/v1/projects/project_123/storage/user-root/upload-intents")
+                let body = try JSONSerialization.jsonObject(with: requestBodyData(request)) as? [String: Any]
+                XCTAssertEqual(body?["object_key"] as? String, "/chat/room_123/images/client_image_123/0.jpg")
+                XCTAssertEqual(body?["content_type"] as? String, "image/jpeg")
+                let metadata = try XCTUnwrap(body?["metadata"] as? [String: String])
+                XCTAssertEqual(metadata["purpose"], "chat_image")
+                XCTAssertEqual(metadata["room_id"], "room_123")
+                XCTAssertEqual(metadata["client_message_id"], "client_image_123")
+                return jsonResponse(
+                    status: 201,
+                    body: """
+                    {
+                      "data": {
+                        "upload_id": "upl_chat_image",
+                        "object_key": "/chat/room_123/images/client_image_123/0.jpg",
+                        "upload_method": "PUT",
+                        "upload_url": "https://chat.example.test/signed-put/chat-image",
+                        "upload_headers": {
+                          "Content-Type": "image/jpeg"
+                        },
+                        "expires_at": "2026-07-24T01:15:00Z"
+                      }
+                    }
+                    """
+                )
+            case 1:
+                XCTAssertEqual(request.httpMethod, "PUT")
+                XCTAssertEqual(request.url?.path, "/signed-put/chat-image")
+                XCTAssertEqual(try requestBodyData(request), Data("image-data".utf8))
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data())
+            case 2:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), "storage-chat_image-complete-client_image_123")
+                XCTAssertEqual(request.url?.path, "/platform/v1/projects/project_123/storage/user-root/upload-intents/upl_chat_image/complete")
+                return storageObjectEnvelope(
+                    status: 202,
+                    objectKey: "/chat/room_123/images/client_image_123/0.jpg",
+                    contentType: "image/jpeg",
+                    byteSize: 10,
+                    metadata: [
+                        "purpose": "chat_image",
+                        "room_id": "room_123",
+                        "client_message_id": "client_image_123"
+                    ]
+                )
+            default:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer chat_access_token")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Idempotency-Key"), "chat-message-client_image_123")
+                XCTAssertEqual(request.url?.path, "/v1/chat/rooms/room_123/messages")
+                let json = try JSONSerialization.jsonObject(with: requestBodyData(request)) as? [String: Any]
+                XCTAssertEqual(json?["client_message_id"] as? String, "client_image_123")
+                let content = json?["content"] as? [String: Any]
+                XCTAssertEqual(content?["kind"] as? String, "image")
+                XCTAssertEqual(content?["text"] as? String, "caption")
+                let refs = try XCTUnwrap(content?["storage_object_references"] as? [[String: Any]])
+                XCTAssertEqual(refs.first?["object_key"] as? String, "/chat/room_123/images/client_image_123/0.jpg")
+                XCTAssertEqual(refs.first?["content_type"] as? String, "image/jpeg")
+                return messageResponse(status: 201)
+            }
+        }
+
+        let message = try await sender.sendImageMessage(
+            roomID: "room_123",
+            imageData: Data("image-data".utf8),
+            contentType: "image/jpeg",
+            caption: "caption",
+            clientMessageID: "client_image_123",
+            idempotencySeed: "client_image_123"
+        )
+
+        XCTAssertEqual(message.messageID, "msg_123")
+        XCTAssertEqual(requestIndex, 4)
     }
 
     func testReadMediaURLsSendsAssetIDs() async throws {
@@ -533,6 +621,20 @@ final class SpectraChatClientTests: XCTestCase {
             urlSession: session
         )
     }
+
+    private func makeStorageClient() -> SpectraStorageClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        return SpectraStorageClient(
+            configuration: SpectraStorageClientConfiguration(
+                baseURL: URL(string: "https://chat.example.test")!,
+                projectId: "project_123"
+            ),
+            tokenProvider: StaticSpectraStorageAccessTokenProvider(token: "storage_access_token"),
+            urlSession: session
+        )
+    }
 }
 
 private final class MockURLProtocol: URLProtocol {
@@ -609,6 +711,40 @@ private func jsonResponse(status: Int, body: String) -> (HTTPURLResponse, Data) 
     return (
         HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!,
         Data(body.utf8)
+    )
+}
+
+private func storageObjectEnvelope(
+    status: Int,
+    objectKey: String,
+    contentType: String,
+    byteSize: Int64,
+    metadata: [String: String]
+) -> (HTTPURLResponse, Data) {
+    let metadataJSON = metadata
+        .map { #""\#($0.key)": "\#($0.value)""# }
+        .sorted()
+        .joined(separator: ",")
+    return jsonResponse(
+        status: status,
+        body: """
+        {
+          "data": {
+            "object_key": "\(objectKey)",
+            "status": "ready",
+            "visibility": "private",
+            "content_type": "\(contentType)",
+            "byte_size": \(byteSize),
+            "checksum_sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "metadata": { \(metadataJSON) },
+            "etag": "etag-1",
+            "public_url": null,
+            "rejection_category": null,
+            "created_at": "2026-07-24T01:00:00Z",
+            "updated_at": "2026-07-24T01:00:00Z"
+          }
+        }
+        """
     )
 }
 

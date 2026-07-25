@@ -14,13 +14,22 @@ let package = Package(
             targets: ["SpectraChatSDK"]
         ),
     ],
+    dependencies: [
+        .package(url: "https://github.com/Spectra-Platform/storage-sdk-ios.git", branch: "main"),
+    ],
     targets: [
         .target(
-            name: "SpectraChatSDK"
+            name: "SpectraChatSDK",
+            dependencies: [
+                .product(name: "SpectraStorageSDK", package: "storage-sdk-ios"),
+            ]
         ),
         .testTarget(
             name: "SpectraChatSDKTests",
-            dependencies: ["SpectraChatSDK"]
+            dependencies: [
+                "SpectraChatSDK",
+                .product(name: "SpectraStorageSDK", package: "storage-sdk-ios"),
+            ]
         ),
     ]
 )
