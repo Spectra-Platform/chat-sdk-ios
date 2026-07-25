@@ -77,20 +77,39 @@ let imageMessage = try await chat.sendMessage(
 )
 ```
 
-## 6. WebSocket command envelope
+## 6. WebSocket realtime runtime
 
-현재 SDK는 WebSocket transport를 직접 소유하지 않고, 서버 계약에 맞는 command envelope를 생성한다.
+SDK는 WebSocket transport를 직접 소유한다. 앱은 `SpectraChatRealtimeClient`를 만들고 event stream을 구독한다.
 
 ```swift
-let request = try await chat.socketRequest()
-let command = chat.makeTextMessageCommand(
+let realtime = SpectraChatRealtimeClient(client: chat)
+let events = await realtime.events()
+
+try await realtime.connect()
+
+let message = try await realtime.sendTextMessage(
     roomID: "room_123",
     text: "hello",
     clientMessageID: UUID().uuidString
 )
+
+for await event in events {
+    switch event {
+    case .messageCreated(let message):
+        print(message.messageID)
+    case .readCursorUpdated(let cursor):
+        print(cursor.lastReadServerSequence)
+    case .typingUpdated(let typing):
+        print(typing.isTyping)
+    case .callLifecycle(let call):
+        print(call.eventType.rawValue)
+    default:
+        break
+    }
+}
 ```
 
-앱은 기존 WebSocket runtime 또는 후속 SDK transport slice로 `request`에 연결한 뒤 `command`를 encode해 `/v1/socket`에 전송한다.
+`SpectraChatRealtimeClient`는 authenticated `/v1/socket` request, `URLSessionWebSocketTask`, receive loop, command 송신과 기본 reconnect 상태 이벤트를 소유한다.
 
 ## 7. Push notification 경계
 
@@ -108,8 +127,8 @@ Chat message transaction
 
 ## 아직 완료가 아닌 것
 
-- WebSocket reconnect/runtime transport
-- server event typed decoder convenience
+- 실제 앱에서 기존 WebSocket adapter를 `SpectraChatRealtimeClient`로 교체
+- 실제 네트워크 reconnect/backoff UX 세부 조율
 - rich media upload와 Media/Storage SDK 연결
 - 실제 Spectra iOS app integration
 - 실제 message send → push 수신 E2E

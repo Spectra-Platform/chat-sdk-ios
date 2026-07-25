@@ -1,5 +1,17 @@
 # WORKLOG — chat-sdk-ios
 
+## 2026-07-25 — SDK-owned WebSocket realtime runtime
+
+- 상태: 완료
+- 목적: SDK 소비자가 앱에서 별도 WebSocket transport를 직접 만들지 않아도 Chat realtime을 사용할 수 있게 한다.
+- 주요 변경 영역:
+  - `SpectraChatRealtimeClient` 추가
+  - authenticated socket 연결, receive loop, `events()` stream, command 송신과 기본 reconnect 상태 추가
+  - `message.created`, `read_cursor.updated`, `typing.updated`, server error와 call lifecycle decode 추가
+  - README/HANDOFF와 상세 작업 로그 갱신
+- 검증 상태: `swift test` 15 tests 통과
+- 상세 기록: [`2026-07-25-04-sdk-owned-websocket-runtime.md`](docs/work-logs/2026-07-25-04-sdk-owned-websocket-runtime.md)
+
 ## 2026-07-25 — Storage object references in received content
 
 - 상태: 완료

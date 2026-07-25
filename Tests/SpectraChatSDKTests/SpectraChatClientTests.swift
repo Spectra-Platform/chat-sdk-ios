@@ -263,6 +263,137 @@ final class SpectraChatClientTests: XCTestCase {
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer chat_access_token")
     }
 
+    func testTypingCommandMatchesSocketContract() throws {
+        let client = makeClient()
+
+        let command = client.makeTypingCommand(roomID: "room_123", isTyping: true, eventID: "evt_typing_123")
+        let encoded = try JSONEncoder().encode(command)
+        let json = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+
+        XCTAssertEqual(json?["event_id"] as? String, "evt_typing_123")
+        XCTAssertEqual(json?["event_type"] as? String, "typing.set")
+        XCTAssertEqual(json?["room_id"] as? String, "room_123")
+        let payload = json?["payload"] as? [String: Any]
+        XCTAssertEqual(payload?["is_typing"] as? Bool, true)
+    }
+
+    func testRealtimeDecoderDecodesConnectionReady() throws {
+        let data = Data(
+            """
+            {
+              "schema_version": 1,
+              "event_id": "evt_ready",
+              "event_type": "connection.ready",
+              "room_id": null,
+              "server_sequence": null,
+              "occurred_at": "2026-07-25T00:00:00Z",
+              "payload": {}
+            }
+            """.utf8
+        )
+
+        let event = try SpectraChatRealtimeClient.decodeEvent(from: data)
+
+        XCTAssertEqual(event, .connectionChanged(.connected))
+    }
+
+    func testRealtimeDecoderDecodesMessageCreated() throws {
+        let data = Data(
+            """
+            {
+              "schema_version": 1,
+              "event_id": "evt_msg",
+              "event_type": "message.created",
+              "room_id": "room_123",
+              "server_sequence": 2,
+              "occurred_at": "2026-07-25T00:00:00Z",
+              "payload": {
+                "message": {
+                  "message_id": "msg_123",
+                  "room_id": "room_123",
+                  "server_sequence": 2,
+                  "client_message_id": "client_123",
+                  "sender_user_id": "usr_a",
+                  "content": {
+                    "kind": "text",
+                    "text": "hello realtime",
+                    "media_items": []
+                  },
+                  "reply_to_message_id": null,
+                  "mentioned_user_ids": [],
+                  "created_at": "2026-07-25T00:00:01Z",
+                  "edited_at": null,
+                  "deleted_at": null
+                }
+              }
+            }
+            """.utf8
+        )
+
+        let event = try SpectraChatRealtimeClient.decodeEvent(from: data)
+
+        guard case .messageCreated(let message) = event else {
+            return XCTFail("Expected messageCreated, got \(event)")
+        }
+        XCTAssertEqual(message.messageID, "msg_123")
+        XCTAssertEqual(message.content.text, "hello realtime")
+    }
+
+    func testRealtimeDecoderDecodesReadCursorAndTyping() throws {
+        let readCursorData = Data(
+            """
+            {
+              "schema_version": 1,
+              "event_id": "evt_read",
+              "event_type": "read_cursor.updated",
+              "room_id": "room_123",
+              "server_sequence": 3,
+              "occurred_at": "2026-07-25T00:00:02Z",
+              "payload": {
+                "user_id": "usr_b",
+                "last_read_server_sequence": 3
+              }
+            }
+            """.utf8
+        )
+        let typingData = Data(
+            """
+            {
+              "schema_version": 1,
+              "event_id": "evt_typing",
+              "event_type": "typing.updated",
+              "room_id": "room_123",
+              "server_sequence": 4,
+              "occurred_at": "2026-07-25T00:00:03Z",
+              "payload": {
+                "user_id": "usr_b",
+                "is_typing": true
+              }
+            }
+            """.utf8
+        )
+
+        let readCursor = try SpectraChatRealtimeClient.decodeEvent(from: readCursorData)
+        let typing = try SpectraChatRealtimeClient.decodeEvent(from: typingData)
+
+        XCTAssertEqual(
+            readCursor,
+            .readCursorUpdated(
+                SpectraChatReadCursorUpdated(
+                    roomID: "room_123",
+                    userID: "usr_b",
+                    lastReadServerSequence: 3
+                )
+            )
+        )
+        XCTAssertEqual(
+            typing,
+            .typingUpdated(
+                SpectraChatTypingUpdated(roomID: "room_123", userID: "usr_b", isTyping: true)
+            )
+        )
+    }
+
     func testCallLifecycleEventDecodesWithoutMediaTransportCredential() throws {
         let data = Data(
             """

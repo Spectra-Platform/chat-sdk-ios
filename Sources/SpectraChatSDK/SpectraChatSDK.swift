@@ -268,6 +268,79 @@ public struct SpectraChatReadCursorUpdate: Codable, Equatable, Sendable {
     }
 }
 
+public struct SpectraChatTypingSet: Codable, Equatable, Sendable {
+    public var isTyping: Bool
+
+    public init(isTyping: Bool) {
+        self.isTyping = isTyping
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case isTyping = "is_typing"
+    }
+}
+
+public struct SpectraChatReadCursorUpdated: Equatable, Sendable {
+    public var roomID: String
+    public var userID: String
+    public var lastReadServerSequence: Int64
+
+    public init(roomID: String, userID: String, lastReadServerSequence: Int64) {
+        self.roomID = roomID
+        self.userID = userID
+        self.lastReadServerSequence = lastReadServerSequence
+    }
+}
+
+public struct SpectraChatTypingUpdated: Equatable, Sendable {
+    public var roomID: String
+    public var userID: String
+    public var isTyping: Bool
+
+    public init(roomID: String, userID: String, isTyping: Bool) {
+        self.roomID = roomID
+        self.userID = userID
+        self.isTyping = isTyping
+    }
+}
+
+public struct SpectraChatServerError: Error, Equatable, Sendable {
+    public var requestEventID: String?
+    public var code: String
+    public var message: String
+    public var retryable: Bool
+
+    public init(requestEventID: String?, code: String, message: String, retryable: Bool) {
+        self.requestEventID = requestEventID
+        self.code = code
+        self.message = message
+        self.retryable = retryable
+    }
+}
+
+public enum SpectraChatRealtimeConnectionState: Equatable, Sendable {
+    case connecting
+    case connected
+    case reconnecting(attempt: Int)
+    case disconnected
+}
+
+public enum SpectraChatRealtimeEvent: Equatable, Sendable {
+    case connectionChanged(SpectraChatRealtimeConnectionState)
+    case messageCreated(SpectraChatMessage)
+    case readCursorUpdated(SpectraChatReadCursorUpdated)
+    case typingUpdated(SpectraChatTypingUpdated)
+    case callLifecycle(SpectraChatCallLifecycleEvent)
+    case serverError(SpectraChatServerError)
+    case unknown(eventType: String)
+}
+
+public enum SpectraChatRealtimeError: Error, Equatable, Sendable {
+    case disconnected
+    case acknowledgementTimedOut
+    case server(SpectraChatServerError)
+}
+
 public enum SpectraChatCallEventType: String, CaseIterable, Codable, Sendable {
     case invited = "call.invited"
     case accepted = "call.accepted"
@@ -680,6 +753,19 @@ public final class SpectraChatClient: @unchecked Sendable {
         )
     }
 
+    public func makeTypingCommand(
+        roomID: String,
+        isTyping: Bool,
+        eventID: String = UUID().uuidString
+    ) -> SpectraChatCommandEnvelope<SpectraChatTypingSet> {
+        SpectraChatCommandEnvelope(
+            eventID: eventID,
+            eventType: "typing.set",
+            roomID: roomID,
+            payload: SpectraChatTypingSet(isTyping: isTyping)
+        )
+    }
+
     public func socketURL() throws -> URL {
         guard var components = URLComponents(url: configuration.baseURL, resolvingAgainstBaseURL: false) else {
             throw SpectraChatError.invalidBaseURL
@@ -753,6 +839,420 @@ public final class SpectraChatClient: @unchecked Sendable {
             throw SpectraChatError.invalidBaseURL
         }
         return url
+    }
+}
+
+public actor SpectraChatRealtimeClient {
+    private let client: SpectraChatClient
+    private let urlSession: URLSession
+    private let encoder: JSONEncoder
+    private let decoder: JSONDecoder
+    private let acknowledgementTimeoutNanoseconds: UInt64
+
+    private var socketTask: URLSessionWebSocketTask?
+    private var receiveTask: Task<Void, Never>?
+    private var reconnectTask: Task<Void, Never>?
+    private var subscribers: [UUID: AsyncStream<SpectraChatRealtimeEvent>.Continuation] = [:]
+    private var pendingMessages: [String: PendingMessage] = [:]
+    private var pendingRequestToClientMessage: [String: String] = [:]
+    private var reconnectAttempt = 0
+    private var intentionallyDisconnected = false
+
+    private struct PendingMessage {
+        let requestEventID: String
+        let continuation: CheckedContinuation<SpectraChatMessage, Error>
+    }
+
+    public init(
+        configuration: SpectraChatClientConfiguration,
+        tokenProvider: any SpectraChatAccessTokenProviding,
+        urlSession: URLSession = .shared,
+        acknowledgementTimeoutNanoseconds: UInt64 = 10_000_000_000
+    ) {
+        self.client = SpectraChatClient(
+            configuration: configuration,
+            tokenProvider: tokenProvider,
+            urlSession: urlSession
+        )
+        self.urlSession = urlSession
+        self.encoder = JSONEncoder.spectraChatEncoder
+        self.decoder = JSONDecoder.spectraChatDecoder
+        self.acknowledgementTimeoutNanoseconds = acknowledgementTimeoutNanoseconds
+    }
+
+    public init(
+        client: SpectraChatClient,
+        urlSession: URLSession = .shared,
+        acknowledgementTimeoutNanoseconds: UInt64 = 10_000_000_000
+    ) {
+        self.client = client
+        self.urlSession = urlSession
+        self.encoder = JSONEncoder.spectraChatEncoder
+        self.decoder = JSONDecoder.spectraChatDecoder
+        self.acknowledgementTimeoutNanoseconds = acknowledgementTimeoutNanoseconds
+    }
+
+    public func events() -> AsyncStream<SpectraChatRealtimeEvent> {
+        let subscriberID = UUID()
+        let (stream, continuation) = AsyncStream<SpectraChatRealtimeEvent>.makeStream()
+        subscribers[subscriberID] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeSubscriber(subscriberID) }
+        }
+        Task {
+            do {
+                try await self.connect()
+            } catch {
+                self.yield(.connectionChanged(.disconnected))
+            }
+        }
+        return stream
+    }
+
+    public func connect() async throws {
+        if socketTask != nil { return }
+        intentionallyDisconnected = false
+        yield(.connectionChanged(.connecting))
+        let request = try await client.socketRequest()
+        let task = urlSession.webSocketTask(with: request)
+        socketTask = task
+        task.resume()
+        receiveTask = Task { await self.receiveLoop(task) }
+    }
+
+    public func disconnect() {
+        intentionallyDisconnected = true
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        receiveTask?.cancel()
+        receiveTask = nil
+        socketTask?.cancel(with: .goingAway, reason: nil)
+        socketTask = nil
+        failAllPending(with: SpectraChatRealtimeError.disconnected)
+        yield(.connectionChanged(.disconnected))
+    }
+
+    @discardableResult
+    public func sendTextMessage(
+        roomID: String,
+        text: String,
+        clientMessageID: String = UUID().uuidString,
+        replyToMessageID: String? = nil,
+        mentionedUserIDs: [String] = []
+    ) async throws -> SpectraChatMessage {
+        try await sendMessage(
+            roomID: roomID,
+            content: SpectraChatSendContent(kind: "text", text: text),
+            clientMessageID: clientMessageID,
+            replyToMessageID: replyToMessageID,
+            mentionedUserIDs: mentionedUserIDs
+        )
+    }
+
+    @discardableResult
+    public func sendMessage(
+        roomID: String,
+        content: SpectraChatSendContent,
+        clientMessageID: String = UUID().uuidString,
+        replyToMessageID: String? = nil,
+        mentionedUserIDs: [String] = []
+    ) async throws -> SpectraChatMessage {
+        try await connect()
+        let eventID = UUID().uuidString
+        let command = SpectraChatCommandEnvelope(
+            eventID: eventID,
+            eventType: "message.send",
+            roomID: roomID,
+            payload: SpectraChatSendMessage(
+                clientMessageID: clientMessageID,
+                content: content,
+                replyToMessageID: replyToMessageID,
+                mentionedUserIDs: mentionedUserIDs
+            )
+        )
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                pendingMessages[clientMessageID] = PendingMessage(
+                    requestEventID: eventID,
+                    continuation: continuation
+                )
+                pendingRequestToClientMessage[eventID] = clientMessageID
+                Task {
+                    do {
+                        try await self.send(command)
+                        try await Task.sleep(nanoseconds: self.acknowledgementTimeoutNanoseconds)
+                        self.expirePendingMessage(clientMessageID)
+                    } catch is CancellationError {
+                        self.cancelPendingMessage(clientMessageID)
+                    } catch {
+                        self.failPendingMessage(clientMessageID, error: error)
+                    }
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelPendingMessage(clientMessageID) }
+        }
+    }
+
+    public func updateReadCursor(roomID: String, lastReadServerSequence: Int64) async throws {
+        let command = client.makeReadCursorCommand(
+            roomID: roomID,
+            lastReadServerSequence: lastReadServerSequence
+        )
+        try await send(command)
+    }
+
+    public func setTyping(_ isTyping: Bool, roomID: String) async throws {
+        let command = client.makeTypingCommand(roomID: roomID, isTyping: isTyping)
+        try await send(command)
+    }
+
+    public func send<Payload: Encodable & Sendable>(
+        _ envelope: SpectraChatCommandEnvelope<Payload>
+    ) async throws {
+        try await connect()
+        guard let socketTask else {
+            throw SpectraChatRealtimeError.disconnected
+        }
+        try await socketTask.send(.data(try encoder.encode(envelope)))
+    }
+
+    public static func decodeEvent(from data: Data) throws -> SpectraChatRealtimeEvent {
+        let decoder = JSONDecoder.spectraChatDecoder
+        let header = try decoder.decode(SocketEventHeader.self, from: data)
+        switch header.eventType {
+        case "connection.ready":
+            return .connectionChanged(.connected)
+        case "message.created":
+            let envelope = try decoder.decode(SocketEnvelope<MessageCreatedPayload>.self, from: data)
+            return .messageCreated(envelope.payload.message)
+        case "read_cursor.updated":
+            let roomID = header.roomID ?? ""
+            let envelope = try decoder.decode(SocketEnvelope<ReadCursorUpdatedPayload>.self, from: data)
+            return .readCursorUpdated(
+                SpectraChatReadCursorUpdated(
+                    roomID: roomID,
+                    userID: envelope.payload.userID,
+                    lastReadServerSequence: envelope.payload.lastReadServerSequence
+                )
+            )
+        case "typing.updated":
+            let roomID = header.roomID ?? ""
+            let envelope = try decoder.decode(SocketEnvelope<TypingUpdatedPayload>.self, from: data)
+            return .typingUpdated(
+                SpectraChatTypingUpdated(
+                    roomID: roomID,
+                    userID: envelope.payload.userID,
+                    isTyping: envelope.payload.isTyping
+                )
+            )
+        case "error":
+            let envelope = try decoder.decode(SocketEnvelope<SocketErrorPayload>.self, from: data)
+            return .serverError(
+                SpectraChatServerError(
+                    requestEventID: envelope.payload.requestEventID,
+                    code: envelope.payload.code,
+                    message: envelope.payload.message,
+                    retryable: envelope.payload.retryable
+                )
+            )
+        case "call.invited",
+             "call.accepted",
+             "call.declined",
+             "call.joined",
+             "call.left",
+             "call.ended",
+             "call.missed":
+            return .callLifecycle(try decoder.decode(SpectraChatCallLifecycleEvent.self, from: data))
+        default:
+            return .unknown(eventType: header.eventType)
+        }
+    }
+
+    private func receiveLoop(_ task: URLSessionWebSocketTask) async {
+        do {
+            while !Task.isCancelled {
+                let frame = try await task.receive()
+                let data: Data
+                switch frame {
+                case .data(let value):
+                    data = value
+                case .string(let value):
+                    data = Data(value.utf8)
+                @unknown default:
+                    continue
+                }
+                handle(data)
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            handleDisconnect(task: task)
+        }
+    }
+
+    private func handle(_ data: Data) {
+        let event: SpectraChatRealtimeEvent
+        do {
+            event = try Self.decodeEvent(from: data)
+        } catch {
+#if DEBUG
+            print("[SpectraChatSDK][Realtime] decoding_error=\(error)")
+#endif
+            return
+        }
+        if case .connectionChanged(.connected) = event {
+            reconnectAttempt = 0
+        }
+        if case .messageCreated(let message) = event {
+            completePendingMessage(message.clientMessageID, message: message)
+        }
+        if case .serverError(let serverError) = event,
+           let requestEventID = serverError.requestEventID,
+           let clientMessageID = pendingRequestToClientMessage[requestEventID] {
+            failPendingMessage(clientMessageID, error: SpectraChatRealtimeError.server(serverError))
+        }
+        yield(event)
+    }
+
+    private func handleDisconnect(task: URLSessionWebSocketTask) {
+        guard socketTask === task else { return }
+        socketTask = nil
+        receiveTask = nil
+        failAllPending(with: SpectraChatRealtimeError.disconnected)
+        guard !intentionallyDisconnected, !subscribers.isEmpty else {
+            yield(.connectionChanged(.disconnected))
+            return
+        }
+        scheduleReconnect()
+    }
+
+    private func scheduleReconnect() {
+        guard reconnectTask == nil else { return }
+        reconnectAttempt += 1
+        let attempt = reconnectAttempt
+        yield(.connectionChanged(.reconnecting(attempt: attempt)))
+        reconnectTask = Task {
+            let cappedAttempt = min(attempt, 5)
+            let delay = UInt64(1 << (cappedAttempt - 1)) * 1_000_000_000
+            do {
+                try await Task.sleep(nanoseconds: delay)
+                self.clearReconnectTask()
+                try await self.connect()
+            } catch is CancellationError {
+                self.clearReconnectTask()
+            } catch {
+                self.clearReconnectTask()
+                self.scheduleReconnect()
+            }
+        }
+    }
+
+    private func clearReconnectTask() {
+        reconnectTask = nil
+    }
+
+    private func removeSubscriber(_ id: UUID) {
+        subscribers[id] = nil
+    }
+
+    private func yield(_ event: SpectraChatRealtimeEvent) {
+        subscribers.values.forEach { $0.yield(event) }
+    }
+
+    private func completePendingMessage(_ clientMessageID: String, message: SpectraChatMessage) {
+        guard let pending = pendingMessages.removeValue(forKey: clientMessageID) else { return }
+        pendingRequestToClientMessage[pending.requestEventID] = nil
+        pending.continuation.resume(returning: message)
+    }
+
+    private func failPendingMessage(_ clientMessageID: String, error: Error) {
+        guard let pending = pendingMessages.removeValue(forKey: clientMessageID) else { return }
+        pendingRequestToClientMessage[pending.requestEventID] = nil
+        pending.continuation.resume(throwing: error)
+    }
+
+    private func expirePendingMessage(_ clientMessageID: String) {
+        failPendingMessage(clientMessageID, error: SpectraChatRealtimeError.acknowledgementTimedOut)
+    }
+
+    private func cancelPendingMessage(_ clientMessageID: String) {
+        failPendingMessage(clientMessageID, error: CancellationError())
+    }
+
+    private func failAllPending(with error: Error) {
+        let pending = pendingMessages
+        pendingMessages.removeAll()
+        pendingRequestToClientMessage.removeAll()
+        pending.values.forEach { $0.continuation.resume(throwing: error) }
+    }
+}
+
+private struct SocketEventHeader: Decodable {
+    var eventType: String
+    var roomID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case eventType = "event_type"
+        case roomID = "room_id"
+    }
+}
+
+private struct SocketEnvelope<Payload: Decodable>: Decodable {
+    var schemaVersion: Int
+    var eventID: String
+    var eventType: String
+    var roomID: String?
+    var serverSequence: Int64?
+    var occurredAt: Date
+    var payload: Payload
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case eventID = "event_id"
+        case eventType = "event_type"
+        case roomID = "room_id"
+        case serverSequence = "server_sequence"
+        case occurredAt = "occurred_at"
+        case payload
+    }
+}
+
+private struct MessageCreatedPayload: Decodable {
+    var message: SpectraChatMessage
+}
+
+private struct ReadCursorUpdatedPayload: Decodable {
+    var userID: String
+    var lastReadServerSequence: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case userID = "user_id"
+        case lastReadServerSequence = "last_read_server_sequence"
+    }
+}
+
+private struct TypingUpdatedPayload: Decodable {
+    var userID: String
+    var isTyping: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case userID = "user_id"
+        case isTyping = "is_typing"
+    }
+}
+
+private struct SocketErrorPayload: Decodable {
+    var requestEventID: String?
+    var code: String
+    var message: String
+    var retryable: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case requestEventID = "request_event_id"
+        case code
+        case message
+        case retryable
     }
 }
 

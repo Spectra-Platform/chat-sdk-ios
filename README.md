@@ -1,6 +1,6 @@
 # Spectra Chat SDK for iOS
 
-Swift Package 기반의 Spectra Platform Chat iOS SDK다. 첫 slice는 AuthSDK에서 받은 app-user token provider를 주입받아 Chat API를 호출하고, WebSocket 연결에 필요한 authenticated request와 command envelope 경계를 제공한다.
+Swift Package 기반의 Spectra Platform Chat iOS SDK다. AuthSDK에서 받은 app-user token provider를 주입받아 Chat REST API와 WebSocket realtime runtime을 사용할 수 있게 한다.
 
 ## 현재 구현 상태
 
@@ -16,12 +16,15 @@ Swift Package 기반의 Spectra Platform Chat iOS SDK다. 첫 slice는 AuthSDK�
   - `GET /v1/chat/rooms/{room_id}/messages`
   - `PUT /v1/chat/rooms/{room_id}/read-cursor` (`markRead` convenience 포함)
   - `POST /v1/chat/rooms/{room_id}/media/read-urls`
-- Socket helper:
-  - authenticated `/v1/socket` request
-  - `message.send` command envelope
-  - `read_cursor.update` command envelope
-  - `/v1/socket` URL derivation
+- Realtime WebSocket:
+  - `SpectraChatRealtimeClient`
+  - authenticated `/v1/socket` request 생성과 `URLSessionWebSocketTask` 연결
+  - `connect()` / `disconnect()`
+  - `events()` `AsyncStream<SpectraChatRealtimeEvent>`
+  - `message.send`, `typing.set`, `read_cursor.update` command 송신
+  - `message.created`, `read_cursor.updated`, `typing.updated`, server error decode
   - `call.invited`/`call.accepted`/`call.declined`/`call.joined`/`call.left`/`call.ended`/`call.missed` lifecycle event decoding
+  - 기본 reconnect 상태 이벤트
 - Attachment boundary:
   - Storage SDK 직접 의존 없이 `SpectraChatStorageObjectReference`를 메시지 content에 첨부 가능
 
@@ -90,14 +93,30 @@ let sent = try await chat.sendMessage(
 )
 ```
 
-WebSocket transport는 앱이 소유한다. SDK는 현재 서버 계약에 맞는 command envelope를 만든다.
+WebSocket transport도 SDK가 소유한다. 앱은 realtime client를 만들고 event stream만 구독하면 된다.
 
 ```swift
-let request = try await chat.socketRequest()
-let command = chat.makeTextMessageCommand(
+let realtime = SpectraChatRealtimeClient(client: chat)
+let events = await realtime.events()
+
+try await realtime.connect()
+try await realtime.setTyping(true, roomID: "room_123")
+
+let acknowledged = try await realtime.sendTextMessage(
     roomID: "room_123",
     text: "hello"
 )
+
+for await event in events {
+    switch event {
+    case .messageCreated(let message):
+        print(message.content.text ?? "")
+    case .callLifecycle(let callEvent):
+        print(callEvent.eventType.rawValue)
+    default:
+        break
+    }
+}
 ```
 
 ## 로컬 검증
@@ -109,8 +128,7 @@ swift test
 
 ## 현재 미완료 경계
 
-- URLSessionWebSocketTask 기반 reconnect/runtime transport
-- message.created/read_cursor.updated/typing.updated event decoding convenience
+- 실제 네트워크 reconnect/backoff UX를 앱 화면 정책에 맞춰 더 세밀화
 - rich media upload는 Storage SDK upload 후 `SpectraChatStorageObjectReference` 전달 흐름으로 앱에서 연결 필요
 - 실제 Spectra iOS 앱 integration
 - 실제 message send → Chat outbox → Notification push 기기 수신 E2E
