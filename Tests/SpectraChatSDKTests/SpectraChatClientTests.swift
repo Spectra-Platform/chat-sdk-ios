@@ -653,6 +653,7 @@ final class SpectraChatClientTests: XCTestCase {
         XCTAssertEqual(event.call.status, "ringing")
         XCTAssertEqual(event.call.mediaMode, "video")
         XCTAssertEqual(event.call.callType, "direct")
+        XCTAssertEqual(event.call.initiatorUserID, "app_user_123")
         XCTAssertEqual(event.participants.map(\.appUserID), ["app_user_123", "app_user_456"])
         XCTAssertEqual(event.participants.map(\.state), ["pending", "pending"])
         XCTAssertFalse(event.carriesMediaTransportCredential)
@@ -716,6 +717,7 @@ final class SpectraChatClientTests: XCTestCase {
         XCTAssertEqual(event.roomID, "conv_123")
         XCTAssertEqual(event.call.status, "ringing")
         XCTAssertEqual(event.call.callType, "direct")
+        XCTAssertEqual(event.call.initiatorUserID, "app_user_123")
         XCTAssertEqual(event.participants.map(\.appUserID), ["app_user_123", "app_user_456"])
         XCTAssertEqual(event.participants.map(\.state), ["pending", "pending"])
     }
@@ -780,6 +782,7 @@ final class SpectraChatClientTests: XCTestCase {
         XCTAssertEqual(event.changeType, "participant_connected")
         XCTAssertEqual(event.actor?.appUserID, "app_user_456")
         XCTAssertEqual(event.call.status, "active")
+        XCTAssertEqual(event.call.initiatorUserID, "app_user_123")
         XCTAssertEqual(event.participants.last?.state, "connected")
     }
 

@@ -374,6 +374,7 @@ public struct SpectraChatCallSummary: Codable, Equatable, Sendable {
     public var status: String
     public var mediaMode: String
     public var callType: String
+    public var initiatorUserID: String?
     public var endedReason: String?
 
     public init(
@@ -382,6 +383,7 @@ public struct SpectraChatCallSummary: Codable, Equatable, Sendable {
         status: String,
         mediaMode: String,
         callType: String,
+        initiatorUserID: String? = nil,
         endedReason: String? = nil
     ) {
         self.callID = callID
@@ -389,6 +391,7 @@ public struct SpectraChatCallSummary: Codable, Equatable, Sendable {
         self.status = status
         self.mediaMode = mediaMode
         self.callType = callType
+        self.initiatorUserID = initiatorUserID
         self.endedReason = endedReason
     }
 
@@ -400,6 +403,7 @@ public struct SpectraChatCallSummary: Codable, Equatable, Sendable {
         case mediaMode = "media_mode"
         case callType = "call_type"
         case kind
+        case initiatorUserID = "initiator_user_id"
         case endedReason = "ended_reason"
         case endReason = "end_reason"
     }
@@ -413,6 +417,7 @@ public struct SpectraChatCallSummary: Codable, Equatable, Sendable {
         mediaMode = try container.decodeIfPresent(String.self, forKey: .mediaMode) ?? "video"
         callType = try container.decodeIfPresent(String.self, forKey: .callType)
             ?? container.decode(String.self, forKey: .kind)
+        initiatorUserID = try container.decodeIfPresent(String.self, forKey: .initiatorUserID)
         endedReason = try container.decodeIfPresent(String.self, forKey: .endedReason)
             ?? container.decodeIfPresent(String.self, forKey: .endReason)
     }
@@ -424,6 +429,7 @@ public struct SpectraChatCallSummary: Codable, Equatable, Sendable {
         try container.encode(status, forKey: .status)
         try container.encode(mediaMode, forKey: .mediaMode)
         try container.encode(callType, forKey: .callType)
+        try container.encodeIfPresent(initiatorUserID, forKey: .initiatorUserID)
         try container.encodeIfPresent(endedReason, forKey: .endedReason)
     }
 }
