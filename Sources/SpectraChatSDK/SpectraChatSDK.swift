@@ -17,14 +17,37 @@ public struct StaticSpectraChatAccessTokenProvider: SpectraChatAccessTokenProvid
 }
 
 public struct SpectraChatClientConfiguration: Sendable {
+    public static let productionBaseURL = URL(string: "https://chat.spectra.kr")!
+    public static let productionSocketURL = URL(string: "wss://chat.spectra.kr/v1/socket")!
+
     public var baseURL: URL
     public var socketURL: URL?
     public var projectId: String?
 
-    public init(baseURL: URL, socketURL: URL? = nil, projectId: String? = nil) {
+    public init(
+        baseURL: URL = Self.productionBaseURL,
+        socketURL: URL? = nil,
+        projectId: String? = nil
+    ) {
         self.baseURL = baseURL
         self.socketURL = socketURL
         self.projectId = projectId
+    }
+
+    public static func production(projectId: String? = nil) -> SpectraChatClientConfiguration {
+        SpectraChatClientConfiguration(
+            baseURL: productionBaseURL,
+            socketURL: productionSocketURL,
+            projectId: projectId
+        )
+    }
+
+    public static func custom(
+        baseURL: URL,
+        socketURL: URL? = nil,
+        projectId: String? = nil
+    ) -> SpectraChatClientConfiguration {
+        SpectraChatClientConfiguration(baseURL: baseURL, socketURL: socketURL, projectId: projectId)
     }
 }
 
@@ -752,6 +775,30 @@ public final class SpectraChatClient: @unchecked Sendable {
         self.urlSession = urlSession
         self.encoder = JSONEncoder.spectraChatEncoder
         self.decoder = JSONDecoder.spectraChatDecoder
+    }
+
+    public convenience init(
+        projectId: String? = nil,
+        tokenProvider: any SpectraChatAccessTokenProviding,
+        urlSession: URLSession = .shared
+    ) {
+        self.init(
+            configuration: .production(projectId: projectId),
+            tokenProvider: tokenProvider,
+            urlSession: urlSession
+        )
+    }
+
+    public convenience init(
+        auth tokenProvider: any SpectraChatAccessTokenProviding,
+        projectID: String? = nil,
+        urlSession: URLSession = .shared
+    ) {
+        self.init(
+            projectId: projectID,
+            tokenProvider: tokenProvider,
+            urlSession: urlSession
+        )
     }
 
     public func listRooms(limit: Int? = nil) async throws -> [SpectraChatRoom] {

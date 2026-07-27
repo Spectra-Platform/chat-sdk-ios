@@ -6,7 +6,7 @@ Swift Package 기반의 Spectra Platform Chat iOS SDK다. AuthSDK에서 받은 a
 
 - Swift Package: `SpectraChatSDK`
 - Package URL: `https://github.com/Spectra-Platform/chat-sdk-ios.git`
-- Public configuration: `baseURL`, `socketURL`, `projectId`
+- Public configuration: SDK-owned production `baseURL`/`socketURL`, `projectId`
 - Public token provider: `SpectraChatAccessTokenProviding`
 - REST API:
   - `GET /v1/chat/rooms`
@@ -85,10 +85,7 @@ struct ChatTokenProvider: SpectraChatAccessTokenProviding {
 }
 
 let chat = SpectraChatClient(
-    configuration: SpectraChatClientConfiguration(
-        baseURL: URL(string: "https://chat.spectra.kr")!,
-        projectId: "project_123"
-    ),
+    projectId: "project_123",
     tokenProvider: ChatTokenProvider(auth: authClient)
 )
 
@@ -135,10 +132,7 @@ StorageSDK를 함께 쓰면 이미지/파일/음성 첨부 업로드와 메시�
 import SpectraStorageSDK
 
 let storage = SpectraStorageClient(
-    configuration: .init(
-        baseURL: URL(string: "https://storage.spectra.kr")!,
-        projectId: "project_123"
-    ),
+    projectId: "project_123",
     tokenProvider: storageTokenProvider
 )
 

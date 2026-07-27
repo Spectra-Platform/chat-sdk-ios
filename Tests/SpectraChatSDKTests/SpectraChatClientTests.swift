@@ -9,6 +9,26 @@ final class SpectraChatClientTests: XCTestCase {
         super.tearDown()
     }
 
+    func testProductionConfigurationOwnsPlatformEndpoints() throws {
+        let configuration = SpectraChatClientConfiguration.production(projectId: "project_123")
+
+        XCTAssertEqual(configuration.baseURL.absoluteString, "https://chat.spectra.kr")
+        XCTAssertEqual(configuration.socketURL?.absoluteString, "wss://chat.spectra.kr/v1/socket")
+        XCTAssertEqual(configuration.projectId, "project_123")
+    }
+
+    func testConvenienceClientUsesProductionSocketURL() throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let client = SpectraChatClient(
+            projectId: "project_123",
+            tokenProvider: StaticSpectraChatAccessTokenProvider(token: "chat_access_token"),
+            urlSession: URLSession(configuration: configuration)
+        )
+
+        XCTAssertEqual(try client.socketURL().absoluteString, "wss://chat.spectra.kr/v1/socket")
+    }
+
     func testListRoomsAttachesBearerAndDecodesRooms() async throws {
         let client = makeClient()
         MockURLProtocol.handler = { request in
