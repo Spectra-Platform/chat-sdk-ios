@@ -72,6 +72,10 @@ ChatSDK의 첨부 helper는 StorageSDK를 함께 사용한다. 앱 target에
 
 ## 사용 예시
 
+Modo Camp의 JS SDK parity 목표와 membership/attachment Swift API 초안은
+[Modo Camp iOS Chat SDK parity draft](docs/guides/modo-camp-ios-chat-parity.md)에
+별도로 정리한다.
+
 ```swift
 import SpectraAuthSDK
 import SpectraChatSDK
