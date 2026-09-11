@@ -1,5 +1,21 @@
 # WORKLOG — chat-sdk-ios
 
+## 2026-09-11 — Modo Camp Chat parity implementation
+
+- 상태: 완료, Modo Camp iOS 앱·실기기 Live 세션 E2E는 미검증
+- 목적: Modo Camp iOS SwiftUI가 JS `@spectra-platform/chat-sdk@0.2.0`과 같은 의미로
+  room/message/file/realtime/membership API를 사용할 수 있도록 Swift public surface를 구현한다.
+- 주요 변경 영역:
+  - `createDirectRoom(userID:)`, `createGroupRoom(title:userIDs:)`, `sendMessage(roomID:options:)`,
+    `markRead(roomID:lastReadSequence:)` parity naming 보강
+  - `leaveRoom(roomID:options:)`, `getRoomMembership(roomID:options:)` REST API와 10초 기본 deadline,
+    task cancellation error mapping 추가
+  - `uploadFiles(roomID:options:)`, `sendMessageWithFiles(roomID:options:)` StorageSDK bridge 추가
+  - `room.membership.updated` decode, legacy realtime `.membership`, JS-style `SpectraChatEvent`와 `eventStream()` 추가
+  - JS SDK -> Swift SDK 매핑표와 Modo backend authority 문서 갱신
+- 검증 상태: `swift test` 35 tests 통과, `git diff --check` 통과
+- 상세 기록: [`docs/work-logs/2026-09-11-02-modo-camp-chat-parity-implementation.md`](docs/work-logs/2026-09-11-02-modo-camp-chat-parity-implementation.md)
+
 ## 2026-09-11 — Modo Camp Chat parity draft
 
 - 상태: 문서 계약 초안 완료, leave/membership/file API parity 구현은 미완료

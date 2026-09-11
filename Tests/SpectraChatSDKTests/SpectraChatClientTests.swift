@@ -180,6 +180,32 @@ final class SpectraChatClientTests: XCTestCase {
         XCTAssertEqual(room.roomID, "room_123")
     }
 
+    func testJSParityRoomAliasesSendExpectedPayloads() async throws {
+        let client = makeClient()
+        var requestIndex = 0
+        MockURLProtocol.handler = { request in
+            defer { requestIndex += 1 }
+            XCTAssertEqual(request.httpMethod, "POST")
+            switch requestIndex {
+            case 0:
+                XCTAssertEqual(request.url?.path, "/v1/chat/rooms/direct")
+                let json = try JSONSerialization.jsonObject(with: requestBodyData(request)) as? [String: Any]
+                XCTAssertEqual(json?["participant_user_id"] as? String, "usr_b")
+            default:
+                XCTAssertEqual(request.url?.path, "/v1/chat/rooms/group")
+                let json = try JSONSerialization.jsonObject(with: requestBodyData(request)) as? [String: Any]
+                XCTAssertEqual(json?["title"] as? String, "Camp")
+                XCTAssertEqual(json?["participant_user_ids"] as? [String], ["usr_b", "usr_c"])
+            }
+            return roomResponse(status: 201)
+        }
+
+        _ = try await client.createDirectRoom(userID: "usr_b")
+        _ = try await client.createGroupRoom(title: "Camp", userIDs: ["usr_b", "usr_c"])
+
+        XCTAssertEqual(requestIndex, 2)
+    }
+
     func testSendMessageUsesBearerProjectAndIdempotency() async throws {
         let client = makeClient(projectId: "project_123")
         MockURLProtocol.handler = { request in
@@ -219,6 +245,111 @@ final class SpectraChatClientTests: XCTestCase {
 
         XCTAssertEqual(message.messageID, "msg_123")
         XCTAssertEqual(message.content.text, "hello")
+    }
+
+    func testSendMessageOptionsMatchesJSParitySurface() async throws {
+        let client = makeClient()
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/chat/rooms/room_123/messages")
+            let json = try JSONSerialization.jsonObject(with: requestBodyData(request)) as? [String: Any]
+            XCTAssertEqual(json?["client_message_id"] as? String, "client_options_123")
+            XCTAssertEqual(json?["reply_to_message_id"] as? String, "msg_parent")
+            XCTAssertEqual(json?["mentioned_user_ids"] as? [String], ["usr_b"])
+            let content = json?["content"] as? [String: Any]
+            XCTAssertEqual(content?["kind"] as? String, "attachment")
+            XCTAssertEqual(content?["text"] as? String, "with file")
+            let refs = try XCTUnwrap(content?["storage_object_references"] as? [[String: Any]])
+            XCTAssertEqual(refs.first?["object_key"] as? String, "/chat/room_123/demo.pdf")
+            return messageResponse(status: 201)
+        }
+
+        let message = try await client.sendMessage(
+            roomID: "room_123",
+            options: SpectraChatSendMessageOptions(
+                text: "with file",
+                attachments: [
+                    SpectraChatStorageObjectReference(
+                        objectKey: "/chat/room_123/demo.pdf",
+                        contentType: "application/pdf"
+                    ),
+                ],
+                clientMessageID: "client_options_123",
+                replyToMessageID: "msg_parent",
+                mentionedUserIDs: ["usr_b"]
+            )
+        )
+
+        XCTAssertEqual(message.messageID, "msg_123")
+    }
+
+    func testLeaveRoomPostsMembershipEndpointWithDeadline() async throws {
+        let client = makeClient()
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Content-Type"))
+            XCTAssertEqual(request.url?.path, "/v1/chat/rooms/room_123/leave")
+            return membershipResponse(status: 200, state: "left")
+        }
+
+        let membership = try await client.leaveRoom(
+            roomID: "room_123",
+            options: SpectraChatMembershipRequestOptions(timeout: 1)
+        )
+
+        XCTAssertEqual(membership.roomID, "room_123")
+        XCTAssertEqual(membership.appUserID, "usr_a")
+        XCTAssertEqual(membership.status, .left)
+        XCTAssertNotNil(membership.leftAt)
+    }
+
+    func testGetRoomMembershipUsesMembershipEndpoint() async throws {
+        let client = makeClient()
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/v1/chat/rooms/room_123/membership")
+            return membershipResponse(status: 200, state: "active")
+        }
+
+        let membership = try await client.getRoomMembership(roomID: "room_123")
+
+        XCTAssertEqual(membership.status, .active)
+        XCTAssertNil(membership.leftAt)
+    }
+
+    func testLeaveRoomRejectsActiveMembershipResponse() async throws {
+        let client = makeClient()
+        MockURLProtocol.handler = { _ in
+            membershipResponse(status: 200, state: "active")
+        }
+
+        do {
+            _ = try await client.leaveRoom(roomID: "room_123")
+            XCTFail("Expected invalid response")
+        } catch SpectraChatError.invalidResponse {
+            XCTAssertTrue(true)
+        }
+    }
+
+    func testMembershipDeadlineCoversTokenAcquisition() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let client = SpectraChatClient(
+            configuration: SpectraChatClientConfiguration(baseURL: URL(string: "https://chat.example.test")!),
+            tokenProvider: DelayedSpectraChatTokenProvider(delayNanoseconds: 200_000_000),
+            urlSession: URLSession(configuration: configuration)
+        )
+
+        do {
+            _ = try await client.getRoomMembership(
+                roomID: "room_123",
+                options: SpectraChatMembershipRequestOptions(timeout: 0.01)
+            )
+            XCTFail("Expected timeout")
+        } catch let error as SpectraChatError {
+            XCTAssertEqual(error.code, "REQUEST_TIMEOUT")
+            XCTAssertEqual(error.retryable, true)
+        }
     }
 
     func testStorageAttachmentSenderUploadsImageThenSendsMessage() async throws {
@@ -302,6 +433,162 @@ final class SpectraChatClientTests: XCTestCase {
             caption: "caption",
             clientMessageID: "client_image_123",
             idempotencySeed: "client_image_123"
+        )
+
+        XCTAssertEqual(message.messageID, "msg_123")
+        XCTAssertEqual(requestIndex, 4)
+    }
+
+    func testUploadFilesUsesStorageClientAndReturnsChatReferences() async throws {
+        let storage = makeStorageClient()
+        let client = makeClient(projectId: "project_123", storageClient: storage)
+        var requestIndex = 0
+        let progressRecorder = ProgressRecorder()
+
+        MockURLProtocol.handler = { request in
+            defer { requestIndex += 1 }
+            switch requestIndex {
+            case 0:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer storage_access_token")
+                XCTAssertEqual(request.url?.path, "/platform/v1/projects/project_123/storage/user-root/upload-intents")
+                XCTAssertTrue(request.value(forHTTPHeaderField: "Idempotency-Key")?.hasPrefix("storage-chat_file-upload-") == true)
+                let body = try JSONSerialization.jsonObject(with: requestBodyData(request)) as? [String: Any]
+                XCTAssertEqual(body?["object_key"] as? String, "/chat/room_123/photo.png")
+                XCTAssertEqual(body?["content_type"] as? String, "image/png")
+                let metadata = try XCTUnwrap(body?["metadata"] as? [String: String])
+                XCTAssertEqual(metadata["storage_scope"], "chat")
+                XCTAssertNil(metadata["original_name"])
+                return jsonResponse(
+                    status: 201,
+                    body: """
+                    {
+                      "data": {
+                        "upload_id": "upl_chat_file",
+                        "object_key": "/chat/room_123/photo.png",
+                        "upload_method": "PUT",
+                        "upload_url": "https://chat.example.test/signed-put/chat-file",
+                        "upload_headers": {
+                          "Content-Type": "image/png"
+                        },
+                        "expires_at": "2026-07-24T01:15:00Z"
+                      }
+                    }
+                    """
+                )
+            case 1:
+                XCTAssertEqual(request.httpMethod, "PUT")
+                XCTAssertEqual(request.url?.path, "/signed-put/chat-file")
+                XCTAssertEqual(try requestBodyData(request), Data("file-data".utf8))
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data())
+            default:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/platform/v1/projects/project_123/storage/user-root/upload-intents/upl_chat_file/complete")
+                XCTAssertTrue(request.value(forHTTPHeaderField: "Idempotency-Key")?.hasPrefix("storage-chat_file-complete-") == true)
+                return storageObjectEnvelope(
+                    status: 202,
+                    objectKey: "/chat/room_123/photo.png",
+                    contentType: "image/png",
+                    byteSize: 9,
+                    metadata: ["storage_scope": "chat"],
+                    publicURL: "https://storage.example.test/public/photo.png"
+                )
+            }
+        }
+
+        let references = try await client.uploadFiles(
+            roomID: "room_123",
+            options: SpectraChatUploadFilesOptions(
+                files: [
+                    SpectraChatFileDescriptor(
+                        data: Data("file-data".utf8),
+                        name: "photo.png",
+                        path: "/chat/room_123/photo.png",
+                        contentType: "image/png",
+                        metadata: ["caption_scope": "chat"],
+                        storageMetadata: ["storage_scope": "chat"]
+                    ),
+                ],
+                onProgress: { progressRecorder.append($0) }
+            )
+        )
+
+        XCTAssertEqual(references.first?.objectKey, "/chat/room_123/photo.png")
+        XCTAssertEqual(references.first?.metadata["original_name"], "photo.png")
+        XCTAssertEqual(references.first?.metadata["attachment_kind"], "image")
+        XCTAssertEqual(references.first?.metadata["caption_scope"], "chat")
+        XCTAssertEqual(references.first?.metadata["public_url"], "https://storage.example.test/public/photo.png")
+        XCTAssertEqual(progressRecorder.events.first?.loaded, 9)
+        XCTAssertEqual(requestIndex, 3)
+    }
+
+    func testSendMessageWithFilesUploadsThenSendsCombinedAttachments() async throws {
+        let storage = makeStorageClient()
+        let client = makeClient(projectId: "project_123", storageClient: storage)
+        var requestIndex = 0
+
+        MockURLProtocol.handler = { request in
+            defer { requestIndex += 1 }
+            switch requestIndex {
+            case 0:
+                return jsonResponse(
+                    status: 201,
+                    body: """
+                    {
+                      "data": {
+                        "upload_id": "upl_chat_file",
+                        "object_key": "/chat/room_123/doc.pdf",
+                        "upload_method": "PUT",
+                        "upload_url": "https://chat.example.test/signed-put/doc",
+                        "upload_headers": {
+                          "Content-Type": "application/pdf"
+                        },
+                        "expires_at": "2026-07-24T01:15:00Z"
+                      }
+                    }
+                    """
+                )
+            case 1:
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data())
+            case 2:
+                return storageObjectEnvelope(
+                    status: 202,
+                    objectKey: "/chat/room_123/doc.pdf",
+                    contentType: "application/pdf",
+                    byteSize: 7,
+                    metadata: [:]
+                )
+            default:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/chat/rooms/room_123/messages")
+                let json = try JSONSerialization.jsonObject(with: requestBodyData(request)) as? [String: Any]
+                XCTAssertEqual(json?["client_message_id"] as? String, "client_with_files")
+                let content = json?["content"] as? [String: Any]
+                XCTAssertEqual(content?["kind"] as? String, "attachment")
+                XCTAssertEqual(content?["text"] as? String, "see attached")
+                let refs = try XCTUnwrap(content?["storage_object_references"] as? [[String: Any]])
+                XCTAssertEqual(refs.map { $0["object_key"] as? String }, ["/chat/room_123/existing.png", "/chat/room_123/doc.pdf"])
+                return messageResponse(status: 201)
+            }
+        }
+
+        let message = try await client.sendMessageWithFiles(
+            roomID: "room_123",
+            options: SpectraChatSendMessageWithFilesOptions(
+                text: "see attached",
+                files: [
+                    SpectraChatFileDescriptor(
+                        data: Data("pdfdata".utf8),
+                        name: "doc.pdf",
+                        path: "/chat/room_123/doc.pdf",
+                        contentType: "application/pdf"
+                    ),
+                ],
+                attachments: [
+                    SpectraChatStorageObjectReference(objectKey: "/chat/room_123/existing.png", contentType: "image/png"),
+                ],
+                clientMessageID: "client_with_files"
+            )
         )
 
         XCTAssertEqual(message.messageID, "msg_123")
@@ -515,6 +802,86 @@ final class SpectraChatClientTests: XCTestCase {
                 SpectraChatTypingUpdated(roomID: "room_123", userID: "usr_b", isTyping: true)
             )
         )
+    }
+
+    func testRealtimeDecoderDecodesMembershipEvent() throws {
+        let data = Data(
+            """
+            {
+              "schema_version": 1,
+              "event_id": "evt_membership",
+              "event_type": "room.membership.updated",
+              "room_id": "room_123",
+              "server_sequence": 5,
+              "occurred_at": "2026-09-11T00:00:00Z",
+              "payload": {
+                "room_id": "room_123",
+                "app_user_id": "usr_a",
+                "status": "left",
+                "left_at": "2026-09-11T00:00:00Z"
+              }
+            }
+            """.utf8
+        )
+
+        let event = try SpectraChatRealtimeClient.decodeEvent(from: data)
+
+        guard case .membership(let membership) = event else {
+            return XCTFail("Expected membership event, got \(event)")
+        }
+        XCTAssertEqual(membership.roomID, "room_123")
+        XCTAssertEqual(membership.appUserID, "usr_a")
+        XCTAssertEqual(membership.status, .left)
+        XCTAssertEqual(membership.leftAt, membership.occurredAt)
+
+        let parityEvent = try SpectraChatRealtimeClient.decodeChatEvent(from: data)
+        guard case .membership(let parityMembership) = parityEvent else {
+            return XCTFail("Expected parity membership event, got \(parityEvent)")
+        }
+        XCTAssertEqual(parityMembership.roomID, "room_123")
+    }
+
+    func testChatEventDecoderExposesJSParityMessageEvent() throws {
+        let data = Data(
+            """
+            {
+              "schema_version": 1,
+              "event_id": "evt_msg",
+              "event_type": "message.created",
+              "room_id": "room_123",
+              "server_sequence": 2,
+              "occurred_at": "2026-07-25T00:00:00Z",
+              "payload": {
+                "message": {
+                  "message_id": "msg_123",
+                  "room_id": "room_123",
+                  "server_sequence": 2,
+                  "client_message_id": "client_123",
+                  "sender_user_id": "usr_a",
+                  "content": {
+                    "kind": "text",
+                    "text": "hello realtime",
+                    "media_items": []
+                  },
+                  "reply_to_message_id": null,
+                  "mentioned_user_ids": [],
+                  "created_at": "2026-07-25T00:00:01Z",
+                  "edited_at": null,
+                  "deleted_at": null
+                }
+              }
+            }
+            """.utf8
+        )
+
+        let event = try SpectraChatRealtimeClient.decodeChatEvent(from: data)
+
+        guard case .message(let messageEvent) = event else {
+            return XCTFail("Expected parity message event, got \(event)")
+        }
+        XCTAssertEqual(messageEvent.roomID, "room_123")
+        XCTAssertEqual(messageEvent.sequence, 2)
+        XCTAssertEqual(messageEvent.message.messageID, "msg_123")
     }
 
     func testCallLifecycleEventDecodesWithoutMediaTransportCredential() throws {
@@ -840,7 +1207,8 @@ final class SpectraChatClientTests: XCTestCase {
     private func makeClient(
         baseURL: URL = URL(string: "https://chat.example.test")!,
         socketURL: URL? = nil,
-        projectId: String? = nil
+        projectId: String? = nil,
+        storageClient: SpectraStorageClient? = nil
     ) -> SpectraChatClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockURLProtocol.self]
@@ -852,6 +1220,7 @@ final class SpectraChatClientTests: XCTestCase {
                 projectId: projectId
             ),
             tokenProvider: StaticSpectraChatAccessTokenProvider(token: "chat_access_token"),
+            storageClient: storageClient,
             urlSession: session
         )
     }
@@ -940,6 +1309,24 @@ private func messageResponse(status: Int) -> (HTTPURLResponse, Data) {
     )
 }
 
+private func membershipResponse(status: Int, state: String) -> (HTTPURLResponse, Data) {
+    let leftAt = #""2026-09-11T00:00:00Z""#
+    let leftAtValue = state == "left" ? leftAt : "null"
+    return jsonResponse(
+        status: status,
+        body: """
+        {
+          "data": {
+            "room_id": "room_123",
+            "app_user_id": "usr_a",
+            "status": "\(state)",
+            "left_at": \(leftAtValue)
+          }
+        }
+        """
+    )
+}
+
 private func jsonResponse(status: Int, body: String) -> (HTTPURLResponse, Data) {
     let url = URL(string: "https://chat.example.test")!
     return (
@@ -953,7 +1340,8 @@ private func storageObjectEnvelope(
     objectKey: String,
     contentType: String,
     byteSize: Int64,
-    metadata: [String: String]
+    metadata: [String: String],
+    publicURL: String? = nil
 ) -> (HTTPURLResponse, Data) {
     let metadataJSON = metadata
         .map { #""\#($0.key)": "\#($0.value)""# }
@@ -972,7 +1360,7 @@ private func storageObjectEnvelope(
             "checksum_sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
             "metadata": { \(metadataJSON) },
             "etag": "etag-1",
-            "public_url": null,
+            "public_url": \(publicURL.map { #""\#($0)""# } ?? "null"),
             "rejection_category": null,
             "created_at": "2026-07-24T01:00:00Z",
             "updated_at": "2026-07-24T01:00:00Z"
@@ -980,6 +1368,32 @@ private func storageObjectEnvelope(
         }
         """
     )
+}
+
+private struct DelayedSpectraChatTokenProvider: SpectraChatAccessTokenProviding {
+    var delayNanoseconds: UInt64
+
+    func accessToken() async throws -> String {
+        try await Task.sleep(nanoseconds: delayNanoseconds)
+        return "chat_access_token"
+    }
+}
+
+private final class ProgressRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [SpectraChatFileUploadProgress] = []
+
+    var events: [SpectraChatFileUploadProgress] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
+    }
+
+    func append(_ progress: SpectraChatFileUploadProgress) {
+        lock.lock()
+        values.append(progress)
+        lock.unlock()
+    }
 }
 
 private func requestBodyData(_ request: URLRequest) throws -> Data {

@@ -1,4 +1,5 @@
 import Foundation
+import SpectraStorageSDK
 
 public protocol SpectraChatAccessTokenProviding: Sendable {
     func accessToken() async throws -> String
@@ -305,6 +306,240 @@ public struct SpectraChatTypingSet: Codable, Equatable, Sendable {
     }
 }
 
+public struct SpectraChatSendMessageOptions: Equatable, Sendable {
+    public var text: String?
+    public var attachments: [SpectraChatStorageObjectReference]
+    public var clientMessageID: String
+    public var replyToMessageID: String?
+    public var mentionedUserIDs: [String]
+    public var idempotencyKey: String?
+
+    public init(
+        text: String? = nil,
+        attachments: [SpectraChatStorageObjectReference] = [],
+        clientMessageID: String = UUID().uuidString,
+        replyToMessageID: String? = nil,
+        mentionedUserIDs: [String] = [],
+        idempotencyKey: String? = nil
+    ) {
+        self.text = text
+        self.attachments = attachments
+        self.clientMessageID = clientMessageID
+        self.replyToMessageID = replyToMessageID
+        self.mentionedUserIDs = mentionedUserIDs
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
+public struct SpectraChatMembershipRequestOptions: Equatable, Sendable {
+    public var timeout: TimeInterval?
+
+    public init(timeout: TimeInterval? = nil) {
+        self.timeout = timeout
+    }
+}
+
+public enum SpectraChatRoomMembershipStatus: String, Codable, Equatable, Sendable {
+    case active
+    case left
+}
+
+public struct SpectraChatRoomMembership: Codable, Equatable, Sendable {
+    public var roomID: String
+    public var appUserID: String
+    public var status: SpectraChatRoomMembershipStatus
+    public var leftAt: Date?
+
+    public init(
+        roomID: String,
+        appUserID: String,
+        status: SpectraChatRoomMembershipStatus,
+        leftAt: Date?
+    ) {
+        self.roomID = roomID
+        self.appUserID = appUserID
+        self.status = status
+        self.leftAt = leftAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case roomID = "room_id"
+        case appUserID = "app_user_id"
+        case status
+        case leftAt = "left_at"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        roomID = try container.decode(String.self, forKey: .roomID)
+        appUserID = try container.decode(String.self, forKey: .appUserID)
+        status = try container.decode(SpectraChatRoomMembershipStatus.self, forKey: .status)
+        leftAt = try container.decodeIfPresent(Date.self, forKey: .leftAt)
+        switch status {
+        case .active where leftAt != nil:
+            throw DecodingError.dataCorruptedError(
+                forKey: .leftAt,
+                in: container,
+                debugDescription: "Active membership must not include left_at"
+            )
+        case .left where leftAt == nil:
+            throw DecodingError.dataCorruptedError(
+                forKey: .leftAt,
+                in: container,
+                debugDescription: "Left membership requires left_at"
+            )
+        default:
+            break
+        }
+    }
+}
+
+public typealias SpectraChatLeaveRoomResult = SpectraChatRoomMembership
+
+public struct SpectraChatMembershipEvent: Equatable, Sendable {
+    public var roomID: String
+    public var appUserID: String
+    public var status: SpectraChatRoomMembershipStatus
+    public var leftAt: Date
+    public var occurredAt: Date
+
+    public init(
+        roomID: String,
+        appUserID: String,
+        status: SpectraChatRoomMembershipStatus,
+        leftAt: Date,
+        occurredAt: Date
+    ) {
+        self.roomID = roomID
+        self.appUserID = appUserID
+        self.status = status
+        self.leftAt = leftAt
+        self.occurredAt = occurredAt
+    }
+}
+
+public struct SpectraChatFileDescriptor: Equatable, Sendable {
+    public var data: Data
+    public var name: String?
+    public var path: String?
+    public var contentType: String?
+    public var metadata: [String: String]
+    public var storageMetadata: [String: String]
+
+    public init(
+        data: Data,
+        name: String? = nil,
+        path: String? = nil,
+        contentType: String? = nil,
+        metadata: [String: String] = [:],
+        storageMetadata: [String: String] = [:]
+    ) {
+        self.data = data
+        self.name = name
+        self.path = path
+        self.contentType = contentType
+        self.metadata = metadata
+        self.storageMetadata = storageMetadata
+    }
+}
+
+public struct SpectraChatFileUploadProgress: Equatable, Sendable {
+    public var index: Int
+    public var totalFiles: Int
+    public var fileName: String
+    public var objectKey: String
+    public var loaded: Int64
+    public var total: Int64
+
+    public init(
+        index: Int,
+        totalFiles: Int,
+        fileName: String,
+        objectKey: String,
+        loaded: Int64,
+        total: Int64
+    ) {
+        self.index = index
+        self.totalFiles = totalFiles
+        self.fileName = fileName
+        self.objectKey = objectKey
+        self.loaded = loaded
+        self.total = total
+    }
+}
+
+public struct SpectraChatUploadFilesOptions: Sendable {
+    public var files: [SpectraChatFileDescriptor]
+    public var pathPrefix: String?
+    public var metadata: [String: String]
+    public var storageMetadata: [String: String]
+    public var onProgress: (@Sendable (SpectraChatFileUploadProgress) -> Void)?
+
+    public init(
+        files: [SpectraChatFileDescriptor],
+        pathPrefix: String? = nil,
+        metadata: [String: String] = [:],
+        storageMetadata: [String: String] = [:],
+        onProgress: (@Sendable (SpectraChatFileUploadProgress) -> Void)? = nil
+    ) {
+        self.files = files
+        self.pathPrefix = pathPrefix
+        self.metadata = metadata
+        self.storageMetadata = storageMetadata
+        self.onProgress = onProgress
+    }
+}
+
+public struct SpectraChatFileUploadOptions: Sendable {
+    public var pathPrefix: String?
+    public var metadata: [String: String]
+    public var storageMetadata: [String: String]
+    public var onProgress: (@Sendable (SpectraChatFileUploadProgress) -> Void)?
+
+    public init(
+        pathPrefix: String? = nil,
+        metadata: [String: String] = [:],
+        storageMetadata: [String: String] = [:],
+        onProgress: (@Sendable (SpectraChatFileUploadProgress) -> Void)? = nil
+    ) {
+        self.pathPrefix = pathPrefix
+        self.metadata = metadata
+        self.storageMetadata = storageMetadata
+        self.onProgress = onProgress
+    }
+}
+
+public struct SpectraChatSendMessageWithFilesOptions: Sendable {
+    public var text: String?
+    public var files: [SpectraChatFileDescriptor]
+    public var attachments: [SpectraChatStorageObjectReference]
+    public var upload: SpectraChatFileUploadOptions?
+    public var clientMessageID: String
+    public var replyToMessageID: String?
+    public var mentionedUserIDs: [String]
+    public var idempotencyKey: String?
+
+    public init(
+        text: String? = nil,
+        files: [SpectraChatFileDescriptor],
+        attachments: [SpectraChatStorageObjectReference] = [],
+        upload: SpectraChatFileUploadOptions? = nil,
+        clientMessageID: String = UUID().uuidString,
+        replyToMessageID: String? = nil,
+        mentionedUserIDs: [String] = [],
+        idempotencyKey: String? = nil
+    ) {
+        self.text = text
+        self.files = files
+        self.attachments = attachments
+        self.upload = upload
+        self.clientMessageID = clientMessageID
+        self.replyToMessageID = replyToMessageID
+        self.mentionedUserIDs = mentionedUserIDs
+        self.idempotencyKey = idempotencyKey
+    }
+}
+
 public struct SpectraChatReadCursorUpdated: Equatable, Sendable {
     public var roomID: String
     public var userID: String
@@ -343,6 +578,82 @@ public struct SpectraChatServerError: Error, Equatable, Sendable {
     }
 }
 
+public struct SpectraChatMessageEvent: Equatable, Sendable {
+    public var roomID: String
+    public var message: SpectraChatMessage
+    public var sequence: Int64
+    public var occurredAt: Date
+
+    public init(roomID: String, message: SpectraChatMessage, sequence: Int64, occurredAt: Date) {
+        self.roomID = roomID
+        self.message = message
+        self.sequence = sequence
+        self.occurredAt = occurredAt
+    }
+}
+
+public struct SpectraChatTypingEvent: Equatable, Sendable {
+    public var roomID: String
+    public var userID: String
+    public var isTyping: Bool
+    public var sequence: Int64
+    public var occurredAt: Date
+
+    public init(roomID: String, userID: String, isTyping: Bool, sequence: Int64, occurredAt: Date) {
+        self.roomID = roomID
+        self.userID = userID
+        self.isTyping = isTyping
+        self.sequence = sequence
+        self.occurredAt = occurredAt
+    }
+}
+
+public struct SpectraChatReadEvent: Equatable, Sendable {
+    public var roomID: String
+    public var userID: String
+    public var lastReadSequence: Int64
+    public var sequence: Int64
+    public var occurredAt: Date
+
+    public init(roomID: String, userID: String, lastReadSequence: Int64, sequence: Int64, occurredAt: Date) {
+        self.roomID = roomID
+        self.userID = userID
+        self.lastReadSequence = lastReadSequence
+        self.sequence = sequence
+        self.occurredAt = occurredAt
+    }
+}
+
+public struct SpectraChatConnectionEvent: Equatable, Sendable {
+    public var roomID: String?
+    public var occurredAt: Date?
+
+    public init(roomID: String? = nil, occurredAt: Date? = nil) {
+        self.roomID = roomID
+        self.occurredAt = occurredAt
+    }
+}
+
+public struct SpectraChatErrorEvent: Equatable, Sendable {
+    public var error: SpectraChatServerError
+    public var roomID: String?
+
+    public init(error: SpectraChatServerError, roomID: String? = nil) {
+        self.error = error
+        self.roomID = roomID
+    }
+}
+
+public enum SpectraChatEvent: Equatable, Sendable {
+    case message(SpectraChatMessageEvent)
+    case typing(SpectraChatTypingEvent)
+    case read(SpectraChatReadEvent)
+    case membership(SpectraChatMembershipEvent)
+    case connected(SpectraChatConnectionEvent)
+    case disconnected(SpectraChatConnectionEvent)
+    case error(SpectraChatErrorEvent)
+}
+
 public enum SpectraChatRealtimeConnectionState: Equatable, Sendable {
     case connecting
     case connected
@@ -355,6 +666,7 @@ public enum SpectraChatRealtimeEvent: Equatable, Sendable {
     case messageCreated(SpectraChatMessage)
     case readCursorUpdated(SpectraChatReadCursorUpdated)
     case typingUpdated(SpectraChatTypingUpdated)
+    case membership(SpectraChatMembershipEvent)
     case callLifecycle(SpectraChatCallLifecycleEvent)
     case serverError(SpectraChatServerError)
     case unknown(eventType: String)
@@ -743,6 +1055,13 @@ public struct SpectraChatErrorResponse: Codable, Equatable, Sendable {
     public var retryable: Bool
     public var requestID: String?
 
+    public init(code: String, message: String, retryable: Bool, requestID: String? = nil) {
+        self.code = code
+        self.message = message
+        self.retryable = retryable
+        self.requestID = requestID
+    }
+
     enum CodingKeys: String, CodingKey {
         case code
         case message
@@ -755,12 +1074,72 @@ public enum SpectraChatError: Error, Equatable, Sendable {
     case invalidBaseURL
     case invalidRequest(String)
     case invalidResponse
+    case requestCancelled(SpectraChatErrorResponse)
+    case requestTimeout(SpectraChatErrorResponse)
     case httpStatus(Int, SpectraChatErrorResponse?)
+
+    public var status: Int? {
+        if case .httpStatus(let status, _) = self { return status }
+        return nil
+    }
+
+    public var code: String {
+        switch self {
+        case .invalidBaseURL:
+            return "INVALID_BASE_URL"
+        case .invalidRequest:
+            return "INVALID_REQUEST"
+        case .invalidResponse:
+            return "RESPONSE_INVALID"
+        case .requestCancelled(let response), .requestTimeout(let response):
+            return response.code
+        case .httpStatus(_, let response):
+            return response?.code ?? "HTTP_ERROR"
+        }
+    }
+
+    public var message: String {
+        switch self {
+        case .invalidBaseURL:
+            return "Spectra Chat base URL is invalid."
+        case .invalidRequest(let message):
+            return message
+        case .invalidResponse:
+            return "Spectra Chat returned an invalid response."
+        case .requestCancelled(let response), .requestTimeout(let response):
+            return response.message
+        case .httpStatus(let status, let response):
+            return response?.message ?? "Spectra Chat returned HTTP status \(status)."
+        }
+    }
+
+    public var requestID: String? {
+        switch self {
+        case .requestCancelled(let response), .requestTimeout(let response):
+            return response.requestID
+        case .httpStatus(_, let response):
+            return response?.requestID
+        default:
+            return nil
+        }
+    }
+
+    public var retryable: Bool? {
+        switch self {
+        case .requestCancelled(let response), .requestTimeout(let response):
+            return response.retryable
+        case .httpStatus(_, let response):
+            return response?.retryable
+        default:
+            return nil
+        }
+    }
 }
 
 public final class SpectraChatClient: @unchecked Sendable {
     private let configuration: SpectraChatClientConfiguration
     private let tokenProvider: any SpectraChatAccessTokenProviding
+    private let storageClient: SpectraStorageClient?
     private let urlSession: URLSession
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
@@ -768,10 +1147,12 @@ public final class SpectraChatClient: @unchecked Sendable {
     public init(
         configuration: SpectraChatClientConfiguration,
         tokenProvider: any SpectraChatAccessTokenProviding,
+        storageClient: SpectraStorageClient? = nil,
         urlSession: URLSession = .shared
     ) {
         self.configuration = configuration
         self.tokenProvider = tokenProvider
+        self.storageClient = storageClient
         self.urlSession = urlSession
         self.encoder = JSONEncoder.spectraChatEncoder
         self.decoder = JSONDecoder.spectraChatDecoder
@@ -780,11 +1161,13 @@ public final class SpectraChatClient: @unchecked Sendable {
     public convenience init(
         projectId: String? = nil,
         tokenProvider: any SpectraChatAccessTokenProviding,
+        storageClient: SpectraStorageClient? = nil,
         urlSession: URLSession = .shared
     ) {
         self.init(
             configuration: .production(projectId: projectId),
             tokenProvider: tokenProvider,
+            storageClient: storageClient,
             urlSession: urlSession
         )
     }
@@ -792,11 +1175,13 @@ public final class SpectraChatClient: @unchecked Sendable {
     public convenience init(
         auth tokenProvider: any SpectraChatAccessTokenProviding,
         projectID: String? = nil,
+        storageClient: SpectraStorageClient? = nil,
         urlSession: URLSession = .shared
     ) {
         self.init(
             projectId: projectID,
             tokenProvider: tokenProvider,
+            storageClient: storageClient,
             urlSession: urlSession
         )
     }
@@ -809,6 +1194,14 @@ public final class SpectraChatClient: @unchecked Sendable {
         let request = try await makeRequest(url: url(path: "/v1/chat/rooms", queryItems: query), method: "GET")
         let response: RoomsResponse = try await decodeDataResponse(request: request, expectedStatus: 200)
         return response.rooms
+    }
+
+    public func createDirectRoom(userID: String) async throws -> SpectraChatRoom {
+        try await createDirectRoom(participantUserID: userID)
+    }
+
+    public func createGroupRoom(title: String? = nil, userIDs: [String]) async throws -> SpectraChatRoom {
+        try await createGroupRoom(title: title ?? "", participantUserIDs: userIDs)
     }
 
     public func createRoom(_ input: SpectraChatCreateRoomRequest) async throws -> SpectraChatRoom {
@@ -870,6 +1263,34 @@ public final class SpectraChatClient: @unchecked Sendable {
         return try await decodeDataResponse(request: request, expectedStatus: 201)
     }
 
+    public func sendMessage(
+        roomID: String,
+        options: SpectraChatSendMessageOptions
+    ) async throws -> SpectraChatMessage {
+        var content = SpectraChatSendContent(
+            kind: options.attachments.isEmpty ? "text" : "attachment",
+            text: options.text,
+            storageObjectReferences: options.attachments.isEmpty ? nil : options.attachments
+        )
+        if options.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+            throw SpectraChatError.invalidRequest("message text must not be empty")
+        }
+        if options.text == nil && options.attachments.isEmpty {
+            throw SpectraChatError.invalidRequest("sendMessage requires text or attachments")
+        }
+        if options.attachments.isEmpty == false, options.text == nil {
+            content.text = nil
+        }
+        return try await sendMessage(
+            roomID: roomID,
+            content: content,
+            clientMessageID: options.clientMessageID,
+            replyToMessageID: options.replyToMessageID,
+            mentionedUserIDs: options.mentionedUserIDs,
+            idempotencyKey: options.idempotencyKey
+        )
+    }
+
     public func listMessages(
         roomID: String,
         beforeSequence: Int64? = nil,
@@ -892,6 +1313,136 @@ public final class SpectraChatClient: @unchecked Sendable {
 
     public func markRead(roomID: String, lastReadServerSequence: Int64) async throws {
         try await updateReadCursor(roomID: roomID, lastReadServerSequence: lastReadServerSequence)
+    }
+
+    public func markRead(roomID: String, lastReadSequence: Int64) async throws {
+        try await updateReadCursor(roomID: roomID, lastReadServerSequence: lastReadSequence)
+    }
+
+    public func leaveRoom(
+        roomID: String,
+        options: SpectraChatMembershipRequestOptions = SpectraChatMembershipRequestOptions()
+    ) async throws -> SpectraChatLeaveRoomResult {
+        let membership: SpectraChatRoomMembership = try await withMembershipDeadline(options) {
+            let request = try await self.makeRequest(
+                url: self.url(path: "/v1/chat/rooms/\(encodedPathSegment(roomID))/leave"),
+                method: "POST"
+            )
+            let decoded: SpectraChatRoomMembership = try await self.decodeDataResponse(request: request, expectedStatus: 200)
+            return decoded
+        }
+        try validateMembership(membership, roomID: roomID)
+        guard membership.status == .left else {
+            throw SpectraChatError.invalidResponse
+        }
+        return membership
+    }
+
+    public func getRoomMembership(
+        roomID: String,
+        options: SpectraChatMembershipRequestOptions = SpectraChatMembershipRequestOptions()
+    ) async throws -> SpectraChatRoomMembership {
+        let membership: SpectraChatRoomMembership = try await withMembershipDeadline(options) {
+            let request = try await self.makeRequest(
+                url: self.url(path: "/v1/chat/rooms/\(encodedPathSegment(roomID))/membership"),
+                method: "GET"
+            )
+            let decoded: SpectraChatRoomMembership = try await self.decodeDataResponse(request: request, expectedStatus: 200)
+            return decoded
+        }
+        try validateMembership(membership, roomID: roomID)
+        return membership
+    }
+
+    public func uploadFiles(
+        roomID: String,
+        options: SpectraChatUploadFilesOptions
+    ) async throws -> [SpectraChatStorageObjectReference] {
+        guard let storageClient else {
+            throw SpectraChatError.invalidRequest("uploadFiles requires a SpectraStorageClient")
+        }
+        guard options.files.isEmpty == false else {
+            throw SpectraChatError.invalidRequest("uploadFiles requires at least one file")
+        }
+
+        var references: [SpectraChatStorageObjectReference] = []
+        for (index, file) in options.files.enumerated() {
+            try Task.checkCancellation()
+            let fileName = normalizedFileName(file.name, fallback: "attachment-\(index + 1)")
+            let contentType = normalizedContentType(file.contentType)
+            let objectKey = try normalizedChatAttachmentPath(
+                explicitPath: file.path,
+                roomID: roomID,
+                fileName: fileName,
+                index: index,
+                pathPrefix: options.pathPrefix
+            )
+            let storageMetadata = options.storageMetadata.merging(file.storageMetadata) { _, new in new }
+            let uploaded = try await storageClient.uploadDataToUserRoot(
+                file.data,
+                path: objectKey,
+                contentType: contentType,
+                metadata: storageMetadata,
+                uploadIdempotencyKey: "storage-chat_file-upload-\(UUID().uuidString)",
+                completeIdempotencyKey: "storage-chat_file-complete-\(UUID().uuidString)"
+            )
+            var attachmentMetadata = options.metadata.merging(file.metadata) { _, new in new }
+            attachmentMetadata["original_name"] = fileName
+            attachmentMetadata["attachment_kind"] = attachmentKind(contentType)
+            if let publicURL = uploaded.publicURL {
+                attachmentMetadata["public_url"] = publicURL.absoluteString
+            }
+            options.onProgress?(
+                SpectraChatFileUploadProgress(
+                    index: index,
+                    totalFiles: options.files.count,
+                    fileName: fileName,
+                    objectKey: uploaded.objectKey,
+                    loaded: Int64(file.data.count),
+                    total: Int64(file.data.count)
+                )
+            )
+            references.append(
+                SpectraChatStorageObjectReference(
+                    objectKey: uploaded.objectKey,
+                    contentType: uploaded.contentType,
+                    byteSize: uploaded.byteSize,
+                    checksumSHA256: uploaded.checksumSHA256,
+                    metadata: attachmentMetadata
+                )
+            )
+        }
+        return references
+    }
+
+    public func sendMessageWithFiles(
+        roomID: String,
+        options: SpectraChatSendMessageWithFilesOptions
+    ) async throws -> SpectraChatMessage {
+        let uploadOptions = options.upload ?? SpectraChatFileUploadOptions()
+        let uploadedReferences = options.files.isEmpty
+            ? []
+            : try await uploadFiles(
+                roomID: roomID,
+                options: SpectraChatUploadFilesOptions(
+                    files: options.files,
+                    pathPrefix: uploadOptions.pathPrefix,
+                    metadata: uploadOptions.metadata,
+                    storageMetadata: uploadOptions.storageMetadata,
+                    onProgress: uploadOptions.onProgress
+                )
+            )
+        return try await sendMessage(
+            roomID: roomID,
+            options: SpectraChatSendMessageOptions(
+                text: options.text,
+                attachments: options.attachments + uploadedReferences,
+                clientMessageID: options.clientMessageID,
+                replyToMessageID: options.replyToMessageID,
+                mentionedUserIDs: options.mentionedUserIDs,
+                idempotencyKey: options.idempotencyKey
+            )
+        )
     }
 
     public func updateReadCursor(roomID: String, lastReadServerSequence: Int64) async throws {
@@ -1050,6 +1601,7 @@ public actor SpectraChatRealtimeClient {
     private var receiveTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
     private var subscribers: [UUID: AsyncStream<SpectraChatRealtimeEvent>.Continuation] = [:]
+    private var eventSubscribers: [UUID: AsyncStream<SpectraChatEvent>.Continuation] = [:]
     private var pendingMessages: [String: PendingMessage] = [:]
     private var pendingRequestToClientMessage: [String: String] = [:]
     private var reconnectAttempt = 0
@@ -1106,6 +1658,23 @@ public actor SpectraChatRealtimeClient {
         return stream
     }
 
+    public func eventStream() -> AsyncStream<SpectraChatEvent> {
+        let subscriberID = UUID()
+        let (stream, continuation) = AsyncStream<SpectraChatEvent>.makeStream()
+        eventSubscribers[subscriberID] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeEventSubscriber(subscriberID) }
+        }
+        Task {
+            do {
+                try await self.connect()
+            } catch {
+                self.yield(.disconnected(SpectraChatConnectionEvent()))
+            }
+        }
+        return stream
+    }
+
     public func connect() async throws {
         if socketTask != nil { return }
         intentionallyDisconnected = false
@@ -1115,6 +1684,11 @@ public actor SpectraChatRealtimeClient {
         socketTask = task
         task.resume()
         receiveTask = Task { await self.receiveLoop(task) }
+    }
+
+    public func connect(roomID: String?) async throws {
+        _ = roomID
+        try await connect()
     }
 
     public func disconnect() {
@@ -1127,6 +1701,7 @@ public actor SpectraChatRealtimeClient {
         socketTask = nil
         failAllPending(with: SpectraChatRealtimeError.disconnected)
         yield(.connectionChanged(.disconnected))
+        yield(.disconnected(SpectraChatConnectionEvent()))
     }
 
     @discardableResult
@@ -1243,6 +1818,22 @@ public actor SpectraChatRealtimeClient {
                     isTyping: envelope.payload.isTyping
                 )
             )
+        case "room.membership.updated":
+            let envelope = try decoder.decode(SocketEnvelope<SpectraChatRoomMembership>.self, from: data)
+            guard envelope.payload.status == .left,
+                  let leftAt = envelope.payload.leftAt,
+                  leftAt == envelope.occurredAt else {
+                throw SpectraChatError.invalidResponse
+            }
+            return .membership(
+                SpectraChatMembershipEvent(
+                    roomID: envelope.payload.roomID,
+                    appUserID: envelope.payload.appUserID,
+                    status: envelope.payload.status,
+                    leftAt: leftAt,
+                    occurredAt: envelope.occurredAt
+                )
+            )
         case "error":
             let envelope = try decoder.decode(SocketEnvelope<SocketErrorPayload>.self, from: data)
             return .serverError(
@@ -1264,6 +1855,79 @@ public actor SpectraChatRealtimeClient {
             return .callLifecycle(try decoder.decode(SpectraChatCallLifecycleEvent.self, from: data))
         default:
             return .unknown(eventType: header.eventType)
+        }
+    }
+
+    public static func decodeChatEvent(from data: Data) throws -> SpectraChatEvent {
+        let decoder = JSONDecoder.spectraChatDecoder
+        let header = try decoder.decode(SocketEventHeader.self, from: data)
+        switch header.eventType {
+        case "connection.ready":
+            let envelope = try decoder.decode(SocketEnvelope<EmptySocketPayload>.self, from: data)
+            return .connected(SpectraChatConnectionEvent(roomID: header.roomID, occurredAt: envelope.occurredAt))
+        case "message.created":
+            let envelope = try decoder.decode(SocketEnvelope<MessageCreatedPayload>.self, from: data)
+            return .message(
+                SpectraChatMessageEvent(
+                    roomID: envelope.roomID ?? envelope.payload.message.roomID,
+                    message: envelope.payload.message,
+                    sequence: envelope.serverSequence ?? envelope.payload.message.serverSequence,
+                    occurredAt: envelope.occurredAt
+                )
+            )
+        case "typing.updated":
+            let envelope = try decoder.decode(SocketEnvelope<TypingUpdatedPayload>.self, from: data)
+            return .typing(
+                SpectraChatTypingEvent(
+                    roomID: envelope.roomID ?? "",
+                    userID: envelope.payload.userID,
+                    isTyping: envelope.payload.isTyping,
+                    sequence: envelope.serverSequence ?? 0,
+                    occurredAt: envelope.occurredAt
+                )
+            )
+        case "read_cursor.updated":
+            let envelope = try decoder.decode(SocketEnvelope<ReadCursorUpdatedPayload>.self, from: data)
+            return .read(
+                SpectraChatReadEvent(
+                    roomID: envelope.roomID ?? "",
+                    userID: envelope.payload.userID,
+                    lastReadSequence: envelope.payload.lastReadServerSequence,
+                    sequence: envelope.serverSequence ?? 0,
+                    occurredAt: envelope.occurredAt
+                )
+            )
+        case "room.membership.updated":
+            let envelope = try decoder.decode(SocketEnvelope<SpectraChatRoomMembership>.self, from: data)
+            guard envelope.payload.status == .left,
+                  let leftAt = envelope.payload.leftAt,
+                  leftAt == envelope.occurredAt else {
+                throw SpectraChatError.invalidResponse
+            }
+            return .membership(
+                SpectraChatMembershipEvent(
+                    roomID: envelope.payload.roomID,
+                    appUserID: envelope.payload.appUserID,
+                    status: envelope.payload.status,
+                    leftAt: leftAt,
+                    occurredAt: envelope.occurredAt
+                )
+            )
+        case "error":
+            let envelope = try decoder.decode(SocketEnvelope<SocketErrorPayload>.self, from: data)
+            return .error(
+                SpectraChatErrorEvent(
+                    error: SpectraChatServerError(
+                        requestEventID: envelope.payload.requestEventID,
+                        code: envelope.payload.code,
+                        message: envelope.payload.message,
+                        retryable: envelope.payload.retryable
+                    ),
+                    roomID: envelope.roomID
+                )
+            )
+        default:
+            throw SpectraChatError.invalidResponse
         }
     }
 
@@ -1311,6 +1975,9 @@ public actor SpectraChatRealtimeClient {
             failPendingMessage(clientMessageID, error: SpectraChatRealtimeError.server(serverError))
         }
         yield(event)
+        if let chatEvent = try? Self.decodeChatEvent(from: data) {
+            yield(chatEvent)
+        }
     }
 
     private func handleDisconnect(task: URLSessionWebSocketTask) {
@@ -1318,8 +1985,9 @@ public actor SpectraChatRealtimeClient {
         socketTask = nil
         receiveTask = nil
         failAllPending(with: SpectraChatRealtimeError.disconnected)
-        guard !intentionallyDisconnected, !subscribers.isEmpty else {
+        guard !intentionallyDisconnected, (!subscribers.isEmpty || !eventSubscribers.isEmpty) else {
             yield(.connectionChanged(.disconnected))
+            yield(.disconnected(SpectraChatConnectionEvent()))
             return
         }
         scheduleReconnect()
@@ -1354,8 +2022,16 @@ public actor SpectraChatRealtimeClient {
         subscribers[id] = nil
     }
 
+    private func removeEventSubscriber(_ id: UUID) {
+        eventSubscribers[id] = nil
+    }
+
     private func yield(_ event: SpectraChatRealtimeEvent) {
         subscribers.values.forEach { $0.yield(event) }
+    }
+
+    private func yield(_ event: SpectraChatEvent) {
+        eventSubscribers.values.forEach { $0.yield(event) }
     }
 
     private func completePendingMessage(_ clientMessageID: String, message: SpectraChatMessage) {
@@ -1419,6 +2095,8 @@ private struct SocketEnvelope<Payload: Decodable>: Decodable {
 private struct MessageCreatedPayload: Decodable {
     var message: SpectraChatMessage
 }
+
+private struct EmptySocketPayload: Decodable {}
 
 private struct ReadCursorUpdatedPayload: Decodable {
     var userID: String
@@ -1484,6 +2162,140 @@ private struct GroupCreateRequest: Encodable {
         case title
         case participantUserIDs = "participant_user_ids"
     }
+}
+
+private func withMembershipDeadline<T: Sendable>(
+    _ options: SpectraChatMembershipRequestOptions,
+    operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    let timeout = options.timeout ?? 10
+    let nanoseconds = try membershipTimeoutNanoseconds(timeout)
+    do {
+        return try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask {
+                try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: nanoseconds)
+                throw SpectraChatError.requestTimeout(
+                    SpectraChatErrorResponse(
+                        code: "REQUEST_TIMEOUT",
+                        message: "Chat membership request timed out; query membership before updating the app.",
+                        retryable: true
+                    )
+                )
+            }
+            guard let value = try await group.next() else {
+                throw SpectraChatError.invalidResponse
+            }
+            group.cancelAll()
+            return value
+        }
+    } catch is CancellationError {
+        throw SpectraChatError.requestCancelled(
+            SpectraChatErrorResponse(
+                code: "REQUEST_ABORTED",
+                message: "Chat membership request was cancelled; server state may have changed.",
+                retryable: false
+            )
+        )
+    }
+}
+
+private func membershipTimeoutNanoseconds(_ timeout: TimeInterval) throws -> UInt64 {
+    guard timeout.isFinite, timeout > 0 else {
+        throw SpectraChatError.requestTimeout(
+            SpectraChatErrorResponse(
+                code: "REQUEST_TIMEOUT_INVALID",
+                message: "timeout must be positive.",
+                retryable: false
+            )
+        )
+    }
+    let nanoseconds = timeout * 1_000_000_000
+    guard nanoseconds.isFinite, nanoseconds <= Double(UInt64.max) else {
+        throw SpectraChatError.requestTimeout(
+            SpectraChatErrorResponse(
+                code: "REQUEST_TIMEOUT_INVALID",
+                message: "timeout is too large.",
+                retryable: false
+            )
+        )
+    }
+    return UInt64(nanoseconds.rounded(.up))
+}
+
+private func validateMembership(_ membership: SpectraChatRoomMembership, roomID: String) throws {
+    guard membership.roomID == roomID,
+          membership.appUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+        throw SpectraChatError.invalidResponse
+    }
+}
+
+private func normalizedChatAttachmentPath(
+    explicitPath: String?,
+    roomID: String,
+    fileName: String,
+    index: Int,
+    pathPrefix: String?
+) throws -> String {
+    if let explicitPath {
+        let trimmed = explicitPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            throw SpectraChatError.invalidRequest("file path is required")
+        }
+        return trimmed.hasPrefix("/") ? trimmed : "/\(trimmed)"
+    }
+    let prefix = normalizedPathPrefix(pathPrefix ?? "/chat/\(safePathSegment(roomID))")
+    let timestamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+    return "\(prefix)/\(timestamp)-\(index + 1)-\(UUID().uuidString)-\(safeFileName(fileName))"
+}
+
+private func normalizedPathPrefix(_ value: String) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    let rooted = trimmed.hasPrefix("/") ? trimmed : "/\(trimmed)"
+    let normalized = rooted.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    return normalized.isEmpty ? "/chat" : "/\(normalized)"
+}
+
+private func normalizedFileName(_ value: String?, fallback: String) -> String {
+    let raw = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+    let leaf = raw?.split(whereSeparator: { $0 == "/" || $0 == "\\" }).last.map(String.init)
+    let candidate = leaf?.isEmpty == false ? leaf! : fallback
+    return candidate
+}
+
+private func normalizedContentType(_ value: String?) -> String {
+    guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+          value.isEmpty == false else {
+        return "application/octet-stream"
+    }
+    return value
+}
+
+private func safePathSegment(_ value: String) -> String {
+    let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+    let transformed = value.unicodeScalars.map { scalar -> Character in
+        allowed.contains(scalar) ? Character(scalar) : "-"
+    }
+    let sanitized = String(transformed).trimmingCharacters(in: CharacterSet(charactersIn: ".-_"))
+    return sanitized.isEmpty ? "room" : sanitized
+}
+
+private func safeFileName(_ value: String) -> String {
+    let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+    let transformed = value.unicodeScalars.map { scalar -> Character in
+        allowed.contains(scalar) ? Character(scalar) : "-"
+    }
+    let sanitized = String(transformed).trimmingCharacters(in: CharacterSet(charactersIn: ".-_"))
+    return sanitized.isEmpty ? "attachment" : sanitized
+}
+
+private func attachmentKind(_ contentType: String) -> String {
+    if contentType.lowercased().hasPrefix("image/") { return "image" }
+    if contentType.lowercased().hasPrefix("video/") { return "video" }
+    if contentType.lowercased().hasPrefix("audio/") { return "audio" }
+    return "file"
 }
 
 private func encodedPathSegment(_ value: String) -> String {

@@ -12,10 +12,9 @@ the local `@spectra-platform/chat-sdk@0.2.0` source and the current
 - Current iOS package implements REST room/message/read APIs, WebSocket runtime,
   event decoding, Storage attachment helpers, in-memory store and offline send
   queue.
-- Current iOS package still differs from JS `0.2.0` in app-facing naming and
-  membership APIs. JS has `leaveRoom(roomId, { timeoutMs, signal })`,
-  `getRoomMembership(...)`, `uploadFiles()`, `sendMessageWithFiles()` and
-  `membership` events as the public contract.
+- Current iOS package exposes JS `0.2.0` parity naming for room/message/file
+  helpers, membership APIs and membership events. The legacy Swift event stream
+  remains for compatibility, and `eventStream()` provides JS-style event cases.
 - Modo backend conversation remains the final authority. Spectra realtime
   events are invalidation/refetch triggers, not the source of truth for Modo
   conversation state.
@@ -40,7 +39,7 @@ as it already does. Do not create a new mono-package for this slice.
 let chat = SpectraChatClient(
     configuration: .init(
         baseURL: URL(string: "https://chat.spectra.kr")!,
-        socketURL: URL(string: "wss://chat.spectra.kr/v1/socket"),
+        socketURL: URL(string: "wss://chat.spectra.kr/v1/socket")!,
         projectId: "13d7ce4b-dd2a-4267-b15f-bbdb80b853da"
     ),
     tokenProvider: chatTokenProvider
@@ -55,7 +54,7 @@ through Storage SDK. Neither token should be used for Modo backend bootstrap.
 
 ```swift
 public struct SpectraChatMembershipRequestOptions: Sendable {
-    public var timeout: Duration?
+    public var timeout: TimeInterval?
 }
 
 public enum SpectraChatRoomMembershipStatus: String, Codable, Sendable {
@@ -100,7 +99,7 @@ public enum SpectraChatEvent: Sendable {
     case error(SpectraChatErrorEvent)
 }
 
-public actor SpectraChatClient {
+public final class SpectraChatClient {
     public func createDirectRoom(userID: String) async throws -> SpectraChatRoom
     public func createGroupRoom(title: String?, userIDs: [String]) async throws -> SpectraChatRoom
     public func listRooms(limit: Int?) async throws -> [SpectraChatRoom]
@@ -115,16 +114,19 @@ public actor SpectraChatClient {
 
 public actor SpectraChatRealtimeClient {
     public func connect(roomID: String?) async throws
-    public func disconnect() async
+    public func disconnect()
     public func setTyping(_ isTyping: Bool, roomID: String) async throws
-    public func events() -> AsyncStream<SpectraChatEvent>
+    public func eventStream() -> AsyncStream<SpectraChatEvent>
 }
 ```
 
-Swift cancellation should use task cancellation. `leaveRoom` and
+Swift cancellation uses task cancellation. `leaveRoom` and
 `getRoomMembership` need a per-call deadline that covers token acquisition,
-HTTP request and response parsing. A cancelled leave cannot be treated as a
-rollback; the app should confirm membership before removing or restoring UI.
+HTTP request and response parsing. The public timeout is seconds-based
+`TimeInterval` to keep the package's iOS 15/macOS 12 support; it maps to JS
+`timeoutMs` semantically and defaults to 10 seconds. A cancelled leave cannot be
+treated as a rollback; the app should confirm membership before removing or
+restoring UI.
 
 ## Realtime authority rule for Modo
 
@@ -158,16 +160,60 @@ credential material.
 
 | JS 0.2.0 | Swift target | Current iOS state |
 | --- | --- | --- |
-| `listRooms(options?)` | `listRooms(limit:)` | Implemented with different model names |
+| `listRooms(options?)` | `listRooms(limit:)` | Implemented |
 | `createDirectRoom({ userId })` | `createDirectRoom(userID:)` | Implemented |
 | `createGroupRoom({ title, userIds })` | `createGroupRoom(title:userIDs:)` | Implemented |
 | `listMessages(roomId, options?)` | `listMessages(roomID:beforeSequence:limit:)` | Implemented |
 | `sendMessage(roomId, options)` | `sendMessage(roomID:options:)` | Implemented |
-| `uploadFiles(roomId, options)` | `uploadFiles(roomID:options:)` | Attachment helper exists; parity alias needed |
-| `sendMessageWithFiles(roomId, options)` | `sendMessageWithFiles(roomID:options:)` | Attachment helper exists; parity alias needed |
+| `uploadFiles(roomId, options)` | `uploadFiles(roomID:options:)` | Implemented; requires injected Storage client |
+| `sendMessageWithFiles(roomId, options)` | `sendMessageWithFiles(roomID:options:)` | Implemented; requires injected Storage client |
 | `markRead(roomId, { lastReadSequence })` | `markRead(roomID:lastReadSequence:)` | Implemented |
 | `setTyping(roomId, isTyping)` | `setTyping(_:roomID:)` | Implemented in realtime client |
 | `connect(roomId?)` / `disconnect()` | realtime `connect` / `disconnect` | Implemented |
-| `leaveRoom(roomId, { timeoutMs, signal })` | `leaveRoom(roomID:options:)` | Missing |
-| `getRoomMembership(...)` | `getRoomMembership(roomID:options:)` | Missing |
-| `membership` event | `.membership(...)` | Missing |
+| `leaveRoom(roomId, { timeoutMs, signal })` | `leaveRoom(roomID:options:)` | Implemented |
+| `getRoomMembership(...)` | `getRoomMembership(roomID:options:)` | Implemented |
+| `membership` event | `.membership(...)` | Implemented in `eventStream()` and legacy realtime event |
+
+## Swift usage notes
+
+File helpers need a Storage SDK client because Chat tokens and Storage tokens
+remain separate.
+
+```swift
+let storage = SpectraStorageClient(
+    configuration: .init(
+        baseURL: URL(string: "https://storage.spectra.kr")!,
+        projectId: "13d7ce4b-dd2a-4267-b15f-bbdb80b853da"
+    ),
+    tokenProvider: storageTokenProvider
+)
+
+let chat = SpectraChatClient(
+    configuration: .init(
+        baseURL: URL(string: "https://chat.spectra.kr")!,
+        socketURL: URL(string: "wss://chat.spectra.kr/v1/socket")!,
+        projectId: "13d7ce4b-dd2a-4267-b15f-bbdb80b853da"
+    ),
+    tokenProvider: chatTokenProvider,
+    storageClient: storage
+)
+
+let message = try await chat.sendMessageWithFiles(
+    roomID: roomID,
+    options: SpectraChatSendMessageWithFilesOptions(
+        text: "사진 공유",
+        files: [
+            SpectraChatFileDescriptor(
+                data: imageData,
+                name: "camp-photo.jpg",
+                contentType: "image/jpeg"
+            )
+        ]
+    )
+)
+
+let membership = try await chat.leaveRoom(
+    roomID: roomID,
+    options: SpectraChatMembershipRequestOptions(timeout: 10)
+)
+```

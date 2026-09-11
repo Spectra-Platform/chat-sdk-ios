@@ -31,6 +31,10 @@
 - Swift parity API에는 `leaveRoom(roomID:options:)`, `getRoomMembership(roomID:options:)`,
   `uploadFiles(roomID:options:)`, `sendMessageWithFiles(roomID:options:)`와 membership event가 필요하다.
   timeout/cancel은 task cancellation과 per-call deadline으로 처리하되, 취소된 leave를 rollback으로 간주하지 않는다.
+- 2026-09-11 구현에서 membership timeout은 iOS 15/macOS 12 지원을 유지하기 위해 `TimeInterval`
+  seconds 단위 public option으로 제공한다. JS `timeoutMs`와 의미는 같고 기본값은 10초다.
+- `SpectraChatClient`의 file parity helper는 주입된 `SpectraStorageClient`를 사용한다. storage token은
+  StorageSDK token provider가 가져오며 ChatSDK는 storage token 원문, signed URL, 파일명 원문을 diagnostic으로 출력하지 않는다.
 
 ## 현재 구현 경계
 
@@ -68,7 +72,26 @@
   - `SpectraChatCallParticipant`
   - `SpectraChatCallTrace`
   - `SpectraChatError`
+  - `SpectraChatSendMessageOptions`
+  - `SpectraChatMembershipRequestOptions`
+  - `SpectraChatRoomMembershipStatus`
+  - `SpectraChatRoomMembership`
+  - `SpectraChatLeaveRoomResult`
+  - `SpectraChatMembershipEvent`
+  - `SpectraChatFileDescriptor`
+  - `SpectraChatFileUploadProgress`
+  - `SpectraChatUploadFilesOptions`
+  - `SpectraChatFileUploadOptions`
+  - `SpectraChatSendMessageWithFilesOptions`
+  - `SpectraChatEvent`
+  - `SpectraChatMessageEvent`
+  - `SpectraChatTypingEvent`
+  - `SpectraChatReadEvent`
+  - `SpectraChatConnectionEvent`
+  - `SpectraChatErrorEvent`
 - Unit test는 bearer/project/idempotency header, REST path/query/body, send message decode, history decode, media read URL, socket request, command envelope, realtime event decode, call lifecycle event decode와 error decode를 검증한다.
+- Modo Camp parity unit test는 JS naming alias, send options, leave/membership endpoint, membership timeout,
+  uploadFiles/sendMessageWithFiles StorageSDK bridge, membership event와 `SpectraChatEvent` decode를 검증한다.
 - socket request test는 REST `baseURL` 추론 경로와 explicit `socketURL` override 경로를 모두 검증한다.
 - iOS 앱 통합 기준 문서는 `docs/guides/ios-chat-sdk-integration.md`에 둔다.
 - SwiftPM 릴리즈 기준은 `docs/guides/release-checklist.md`에 둔다.
@@ -87,10 +110,14 @@
 - 실제 네트워크 reconnect/backoff UX와 foreground push dedupe를 앱 화면 정책에 맞춰 조율
 - iOS 앱의 rich media upload flow와 Storage SDK object reference 연결
 - 실제 Spectra iOS 앱 integration
+- 실제 Modo Camp iOS SwiftUI 앱 integration
 - 실제 message send → Notification push 기기 수신 E2E
 - 새 explicit socket URL surface를 Spectra iOS SPM pin에 반영하고, Local Debug에서 Community API room/history와 같은 socket endpoint를 ChatSDK realtime runtime이 사용하는지 확인
-- Modo Camp parity: JS `0.2.0`의 leave/membership event, uploadFiles/sendMessageWithFiles app-facing naming과 timeout/cancel surface 구현
+- Modo Camp parity: 실제 Live 사용자 bearer/session으로 leave 후 list/messages/send/setTyping/websocket-ticket 차단과
+  남은 참가자 history 유지 E2E 검증
 
 ## 마지막으로 코드와 대조한 날짜
 
-- 2026-09-11 문서와 현재 public API를 Modo Camp parity 기준으로 재대조했다. 코드 구현 경계는 2026-07-26 상태에 membership/file API parity가 필요한 상태다.
+- 2026-09-11 문서와 현재 public API를 Modo Camp parity 구현 기준으로 재대조했다. 코드 구현 경계는
+  JS `@spectra-platform/chat-sdk@0.2.0`의 room/message/file/realtime/membership surface를 Swift에서 사용할 수 있는 상태이며,
+  실제 Modo Camp iOS 앱·실기기·Live 사용자 세션 E2E는 남아 있다.

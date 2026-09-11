@@ -12,6 +12,8 @@ Swift Package 기반의 Spectra Platform Chat iOS SDK다. AuthSDK에서 받은 a
   - `GET /v1/chat/rooms`
   - `POST /v1/chat/rooms/direct`
   - `POST /v1/chat/rooms/group`
+  - `POST /v1/chat/rooms/{room_id}/leave`
+  - `GET /v1/chat/rooms/{room_id}/membership`
   - `POST /v1/chat/rooms/{room_id}/messages`
   - `GET /v1/chat/rooms/{room_id}/messages`
   - `PUT /v1/chat/rooms/{room_id}/read-cursor` (`markRead` convenience 포함)
@@ -21,14 +23,17 @@ Swift Package 기반의 Spectra Platform Chat iOS SDK다. AuthSDK에서 받은 a
   - authenticated `/v1/socket` request 생성과 `URLSessionWebSocketTask` 연결
   - `connect()` / `disconnect()`
   - `events()` `AsyncStream<SpectraChatRealtimeEvent>`
+  - `eventStream()` `AsyncStream<SpectraChatEvent>` JS parity stream
   - `message.send`, `typing.set`, `read_cursor.update` command 송신
-  - `message.created`, `read_cursor.updated`, `typing.updated`, server error decode
+  - `message.created`, `read_cursor.updated`, `typing.updated`, `room.membership.updated`, server error decode
   - `call.invited`/`call.state_updated`/`call.accepted`/`call.declined`/`call.joined`/`call.left`/`call.ended`/`call.missed` lifecycle event decoding
   - 기본 reconnect 상태 이벤트
 - Attachment boundary:
   - `SpectraChatStorageObjectReference`를 메시지 content에 첨부 가능
   - StorageSDK를 사용해 이미지/파일/음성 업로드 후 메시지를 보내는
     `SpectraChatStorageAttachmentSender` 제공
+  - JS `0.2.0` parity naming인 `uploadFiles(roomID:options:)`,
+    `sendMessageWithFiles(roomID:options:)` 제공
 - Offline/local state support:
   - `SpectraChatMessagePaginator`
   - `SpectraChatInMemoryStore`
@@ -98,8 +103,20 @@ let messages = try await chat.listMessages(roomID: rooms[0].roomID)
 
 let sent = try await chat.sendMessage(
     roomID: rooms[0].roomID,
-    content: SpectraChatSendContent(kind: "text", text: "hello"),
-    idempotencyKey: UUID().uuidString
+    options: SpectraChatSendMessageOptions(
+        text: "hello",
+        idempotencyKey: UUID().uuidString
+    )
+)
+
+let left = try await chat.leaveRoom(
+    roomID: rooms[0].roomID,
+    options: SpectraChatMembershipRequestOptions(timeout: 10)
+)
+
+let membership = try await chat.getRoomMembership(
+    roomID: rooms[0].roomID,
+    options: SpectraChatMembershipRequestOptions(timeout: 10)
 )
 ```
 
@@ -107,7 +124,7 @@ WebSocket transport도 SDK가 소유한다. 앱은 realtime client를 만들고 
 
 ```swift
 let realtime = SpectraChatRealtimeClient(client: chat)
-let events = await realtime.events()
+let events = await realtime.eventStream()
 
 try await realtime.connect()
 try await realtime.setTyping(true, roomID: "room_123")
@@ -119,10 +136,10 @@ let acknowledged = try await realtime.sendTextMessage(
 
 for await event in events {
     switch event {
-    case .messageCreated(let message):
-        print(message.content.text ?? "")
-    case .callLifecycle(let callEvent):
-        print(callEvent.eventType.rawValue)
+    case .message(let event):
+        print(event.message.content.text ?? "")
+    case .membership(let event):
+        print(event.status.rawValue)
     default:
         break
     }
@@ -136,13 +153,36 @@ StorageSDK를 함께 쓰면 이미지/파일/음성 첨부 업로드와 메시�
 import SpectraStorageSDK
 
 let storage = SpectraStorageClient(
-    projectId: "project_123",
+    configuration: SpectraStorageClientConfiguration(
+        baseURL: URL(string: "https://storage.spectra.kr")!,
+        projectId: "project_123"
+    ),
     tokenProvider: storageTokenProvider
 )
 
 let attachmentSender = SpectraChatStorageAttachmentSender(
     chat: chat,
     storage: storage
+)
+
+let chatWithStorage = SpectraChatClient(
+    projectId: "project_123",
+    tokenProvider: ChatTokenProvider(auth: authClient),
+    storageClient: storage
+)
+
+let messageWithFiles = try await chatWithStorage.sendMessageWithFiles(
+    roomID: "room_123",
+    options: SpectraChatSendMessageWithFilesOptions(
+        text: "첨부 확인",
+        files: [
+            SpectraChatFileDescriptor(
+                data: fileData,
+                name: "camp-photo.jpg",
+                contentType: "image/jpeg"
+            )
+        ]
+    )
 )
 
 try await attachmentSender.sendImageMessage(
@@ -198,4 +238,5 @@ swift test
 - 실제 네트워크 reconnect/backoff UX를 앱 화면 정책에 맞춰 더 세밀화
 - durable disk cache와 gap recovery policy
 - 실제 Spectra iOS 앱 integration
+- Modo Camp iOS 앱 integration
 - 실제 message send → Chat outbox → Notification push 기기 수신 E2E
