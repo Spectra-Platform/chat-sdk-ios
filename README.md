@@ -1,15 +1,17 @@
 # Spectra Chat SDK for iOS
 
-Swift Package 기반의 Spectra Platform Chat iOS SDK다. AuthSDK에서 받은 app-user token provider를 주입받아 Chat REST API와 WebSocket realtime runtime을 사용할 수 있게 한다.
+Swift Package 기반의 Spectra Platform Chat iOS SDK다. 앱이 raw WebSocket, Chat service token refresh, reconnect, room event filtering을 직접 관리하지 않아도 되도록 Chat REST API와 WebSocket realtime runtime을 제공한다.
 
 ## 현재 구현 상태
 
 - Swift Package: `SpectraChatSDK`
 - Package URL: `https://github.com/Spectra-Platform/chat-sdk-ios.git`
+- Minimum platform: iOS 17 / macOS 14. AuthSDK의 `ServiceTokenProvider`를 직접 주입받아 `.chat` service token을 발급/refresh하기 위해 AuthSDK `0.1.2`와 맞춘다.
 - Public configuration: SDK-owned production `baseURL`/`socketURL`, `projectId`
-- Public token provider: `SpectraChatAccessTokenProviding`
+- Public token provider: `SpectraChatClient(auth:)` AuthSDK convenience, 기존 `SpectraChatAccessTokenProviding`
 - REST API:
   - `GET /v1/chat/rooms`
+  - `getRoom(roomID:)` compatibility helper. 현재 Chat 서버에는 `GET /v1/chat/rooms/{room_id}` 전용 endpoint가 없어 SDK가 `listRooms()` 결과에서 찾는다.
   - `POST /v1/chat/rooms/direct`
   - `POST /v1/chat/rooms/group`
   - `POST /v1/chat/rooms/{room_id}/leave`
@@ -20,10 +22,12 @@ Swift Package 기반의 Spectra Platform Chat iOS SDK다. AuthSDK에서 받은 a
   - `POST /v1/chat/rooms/{room_id}/media/read-urls`
 - Realtime WebSocket:
   - `SpectraChatRealtimeClient`
-  - authenticated `/v1/socket` request 생성과 `URLSessionWebSocketTask` 연결
-  - `connect()` / `disconnect()`
+  - `POST /v1/chat/rooms/{room_id}/websocket-ticket` 발급 후 `/v1/socket?ticket=...` 연결
+  - `SpectraChatClient.connect()` / `subscribe(roomID:)` / `connect(roomID:)` / `disconnect()`
   - `events()` `AsyncStream<SpectraChatRealtimeEvent>`
   - `eventStream()` `AsyncStream<SpectraChatEvent>` JS parity stream
+  - `SpectraChatClientDelegate`, `logger` closure
+  - subscribed room 기준 SDK 내부 event filtering
   - `message.send`, `typing.set`, `read_cursor.update` command 송신
   - `message.created`, `read_cursor.updated`, `typing.updated`, `room.membership.updated`, server error decode
   - `call.invited`/`call.state_updated`/`call.accepted`/`call.declined`/`call.joined`/`call.left`/`call.ended`/`call.missed` lifecycle event decoding
@@ -62,7 +66,7 @@ https://github.com/Spectra-Platform/chat-sdk-ios.git
 ```swift
 .package(
     url: "https://github.com/Spectra-Platform/chat-sdk-ios.git",
-    .upToNextMinor(from: "0.1.0")
+    .upToNextMinor(from: "0.2.0")
 )
 ```
 
@@ -72,8 +76,7 @@ target dependency:
 .product(name: "SpectraChatSDK", package: "chat-sdk-ios")
 ```
 
-ChatSDK의 첨부 helper는 StorageSDK를 함께 사용한다. 앱 target에
-`SpectraStorageSDK`도 연결되어 있어야 한다.
+ChatSDK는 AuthSDK `SpectraAuthSDK`와 StorageSDK `SpectraStorageSDK`를 package dependency로 사용한다. 앱 target은 일반적으로 `SpectraChatSDK`만 직접 연결하면 된다.
 
 ## 사용 예시
 
@@ -85,49 +88,50 @@ Modo Camp의 JS SDK parity 목표와 membership/attachment Swift API 초안은
 import SpectraAuthSDK
 import SpectraChatSDK
 
-struct ChatTokenProvider: SpectraChatAccessTokenProviding {
-    let auth: any TokenProvider
-
-    func accessToken() async throws -> String {
-        try await auth.getAccessToken().value
-    }
-}
+let auth = SpectraAuthClient(...)
 
 let chat = SpectraChatClient(
+    auth: auth,
+    configuration: .production(projectId: "project_123")
+)
+
+chat.delegate = self
+chat.logger = { level, event, fields in
+    print("[spectra-chat]", level, event, fields)
+}
+
+let room = try await chat.createDirectRoom(userID: targetUserID)
+
+try await chat.connect()
+try await chat.subscribe(roomID: room.roomID)
+
+let message = try await chat.sendMessage(
+    roomID: room.roomID,
+    text: "안녕하세요",
+    idempotencyKey: UUID().uuidString
+)
+
+try await chat.markRead(roomID: room.roomID, sequence: message.serverSequence)
+try await chat.setTyping(roomID: room.roomID, isTyping: true)
+```
+
+기존 token provider 기반 초기화는 호환 경로로 유지된다.
+
+```swift
+let chat = SpectraChatClient(
     projectId: "project_123",
-    tokenProvider: ChatTokenProvider(auth: authClient)
-)
-
-let rooms = try await chat.listRooms()
-let messages = try await chat.listMessages(roomID: rooms[0].roomID)
-
-let sent = try await chat.sendMessage(
-    roomID: rooms[0].roomID,
-    options: SpectraChatSendMessageOptions(
-        text: "hello",
-        idempotencyKey: UUID().uuidString
-    )
-)
-
-let left = try await chat.leaveRoom(
-    roomID: rooms[0].roomID,
-    options: SpectraChatMembershipRequestOptions(timeout: 10)
-)
-
-let membership = try await chat.getRoomMembership(
-    roomID: rooms[0].roomID,
-    options: SpectraChatMembershipRequestOptions(timeout: 10)
+    tokenProvider: chatTokenProvider
 )
 ```
 
-WebSocket transport도 SDK가 소유한다. 앱은 realtime client를 만들고 event stream만 구독하면 된다.
+WebSocket transport도 SDK가 소유한다. 앱은 raw `URLSessionWebSocketTask`를 만들 필요가 없다.
 
 ```swift
 let realtime = SpectraChatRealtimeClient(client: chat)
 let events = await realtime.eventStream()
 
 try await realtime.connect()
-try await realtime.setTyping(true, roomID: "room_123")
+try await realtime.subscribe(roomID: "room_123")
 
 let acknowledged = try await realtime.sendTextMessage(
     roomID: "room_123",
@@ -166,8 +170,8 @@ let attachmentSender = SpectraChatStorageAttachmentSender(
 )
 
 let chatWithStorage = SpectraChatClient(
-    projectId: "project_123",
-    tokenProvider: ChatTokenProvider(auth: authClient),
+    auth: auth,
+    configuration: .production(projectId: "project_123"),
     storageClient: storage
 )
 
@@ -193,6 +197,15 @@ try await attachmentSender.sendImageMessage(
     clientMessageID: UUID().uuidString
 )
 ```
+
+## Realtime 정책
+
+- `subscribe(roomID:)`는 서버의 `POST /v1/chat/rooms/{room_id}/websocket-ticket`으로 one-time ticket을 받은 뒤 `/v1/socket?ticket=...`에 연결한다. token 원문과 ticket 원문은 logger fields에 남기지 않는다.
+- 서버 MVP는 disconnected event replay를 제공하지 않는다. `connection.ready` 이후 앱은 필요한 room/history/read cursor를 REST로 다시 맞춘다.
+- SDK는 subscribed roomID와 맞는 `message`, `typing`, `read`, `membership`, `call` event만 앱 delegate/stream으로 전달한다. `conversationID`는 `roomID` fallback으로 사용하지 않는다.
+- `sendMessage(roomID:text:)` REST 호출은 저장된 `SpectraChatMessage`를 바로 반환한다. socket `message.send`는 서버가 같은 sender에게도 `message.created`를 echo하며, SDK는 `clientMessageID`가 같은 echo를 send ack로 간주한다.
+- Direct room 생성의 idempotency는 현재 서버에서 “동일 참가자 재사용” 계약으로 문서화되어 있지 않다. 같은 pair가 항상 같은 room을 반환해야 한다면 Chat 서버에 dedicated idempotency 계약이 추가되어야 한다.
+- logger event 이름은 `socket connecting`, `connected`, `room subscribed`, `message received`, `typing received`, `read received`, `token refreshed`, `reconnecting`, `disconnected`, `error`를 사용한다. fields는 `roomID`, `connectionID`, `attempt`, `closeCode`, `errorCode`, `requestID`, `retryAfter`, `messageID`, `sequence` 같은 안전 필드만 사용한다.
 
 SDK가 소켓과 REST를 소유하더라도 앱 화면은 로컬 cache와 pending queue가 필요하다.
 네트워크 실패 시에는 message draft를 queue에 넣고, 연결이 복구되면 flush한다.

@@ -1,8 +1,29 @@
 import Foundation
+import SpectraAuthSDK
 import SpectraStorageSDK
 
 public protocol SpectraChatAccessTokenProviding: Sendable {
     func accessToken() async throws -> String
+}
+
+public protocol SpectraChatAccessTokenRefreshing: SpectraChatAccessTokenProviding {
+    func accessToken(forceRefresh: Bool) async throws -> String
+}
+
+public struct SpectraChatAuthServiceTokenProvider: SpectraChatAccessTokenRefreshing {
+    private let auth: any ServiceTokenProvider
+
+    public init(auth: any ServiceTokenProvider) {
+        self.auth = auth
+    }
+
+    public func accessToken() async throws -> String {
+        try await accessToken(forceRefresh: false)
+    }
+
+    public func accessToken(forceRefresh: Bool) async throws -> String {
+        try await auth.getAccessToken(for: .chat, forceRefresh: forceRefresh).value
+    }
 }
 
 public struct StaticSpectraChatAccessTokenProvider: SpectraChatAccessTokenProviding {
@@ -52,6 +73,31 @@ public struct SpectraChatClientConfiguration: Sendable {
     }
 }
 
+public enum SpectraChatLogLevel: String, Equatable, Sendable {
+    case debug
+    case info
+    case warning
+    case error
+}
+
+public typealias SpectraChatLogger = @Sendable (
+    SpectraChatLogLevel,
+    String,
+    [String: String]
+) -> Void
+
+public protocol SpectraChatClientDelegate: AnyObject {
+    func spectraChatClient(_ client: SpectraChatClient, didChangeConnectionState state: SpectraChatRealtimeConnectionState)
+    func spectraChatClient(_ client: SpectraChatClient, didReceive event: SpectraChatEvent)
+    func spectraChatClient(_ client: SpectraChatClient, didReceiveError error: Error)
+}
+
+public extension SpectraChatClientDelegate {
+    func spectraChatClient(_ client: SpectraChatClient, didChangeConnectionState state: SpectraChatRealtimeConnectionState) {}
+    func spectraChatClient(_ client: SpectraChatClient, didReceive event: SpectraChatEvent) {}
+    func spectraChatClient(_ client: SpectraChatClient, didReceiveError error: Error) {}
+}
+
 public struct SpectraChatRoom: Codable, Equatable, Sendable {
     public var roomID: String
     public var kind: String
@@ -74,6 +120,8 @@ public struct SpectraChatRoom: Codable, Equatable, Sendable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
     }
+
+    public var id: String { roomID }
 }
 
 public struct SpectraChatMessage: Codable, Equatable, Sendable {
@@ -215,6 +263,36 @@ public struct SpectraChatMediaReadURL: Codable, Equatable, Sendable {
         case assetID = "asset_id"
         case url
         case expiresAt = "expires_at"
+    }
+}
+
+public struct SpectraChatWebSocketTicket: Codable, Equatable, Sendable {
+    public var websocketURL: String
+    public var ticket: String
+    public var ticketTransport: String
+    public var expiresAt: Date
+    public var roomID: String
+
+    public init(
+        websocketURL: String,
+        ticket: String,
+        ticketTransport: String,
+        expiresAt: Date,
+        roomID: String
+    ) {
+        self.websocketURL = websocketURL
+        self.ticket = ticket
+        self.ticketTransport = ticketTransport
+        self.expiresAt = expiresAt
+        self.roomID = roomID
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case websocketURL = "websocket_url"
+        case ticket
+        case ticketTransport = "ticket_transport"
+        case expiresAt = "expires_at"
+        case roomID = "room_id"
     }
 }
 
@@ -627,10 +705,12 @@ public struct SpectraChatReadEvent: Equatable, Sendable {
 public struct SpectraChatConnectionEvent: Equatable, Sendable {
     public var roomID: String?
     public var occurredAt: Date?
+    public var connectionID: String?
 
-    public init(roomID: String? = nil, occurredAt: Date? = nil) {
+    public init(roomID: String? = nil, occurredAt: Date? = nil, connectionID: String? = nil) {
         self.roomID = roomID
         self.occurredAt = occurredAt
+        self.connectionID = connectionID
     }
 }
 
@@ -644,6 +724,62 @@ public struct SpectraChatErrorEvent: Equatable, Sendable {
     }
 }
 
+private extension SpectraChatMessageEvent {
+    var logFields: [String: String] {
+        [
+            "roomID": roomID,
+            "messageID": message.messageID,
+            "sequence": String(sequence),
+        ]
+    }
+}
+
+private extension SpectraChatTypingEvent {
+    var logFields: [String: String] {
+        [
+            "roomID": roomID,
+            "sequence": String(sequence),
+        ]
+    }
+}
+
+private extension SpectraChatReadEvent {
+    var logFields: [String: String] {
+        [
+            "roomID": roomID,
+            "sequence": String(sequence),
+        ]
+    }
+}
+
+private extension SpectraChatConnectionEvent {
+    var logFields: [String: String] {
+        var fields: [String: String] = [:]
+        if let roomID {
+            fields["roomID"] = roomID
+        }
+        if let connectionID {
+            fields["connectionID"] = connectionID
+        }
+        return fields
+    }
+}
+
+private extension SpectraChatErrorEvent {
+    var logFields: [String: String] {
+        var fields: [String: String] = [
+            "errorCode": error.code,
+        ]
+        if let roomID {
+            fields["roomID"] = roomID
+        }
+        if let requestEventID = error.requestEventID {
+            fields["requestID"] = requestEventID
+        }
+        return fields
+    }
+}
+
 public enum SpectraChatEvent: Equatable, Sendable {
     case message(SpectraChatMessageEvent)
     case typing(SpectraChatTypingEvent)
@@ -652,6 +788,25 @@ public enum SpectraChatEvent: Equatable, Sendable {
     case connected(SpectraChatConnectionEvent)
     case disconnected(SpectraChatConnectionEvent)
     case error(SpectraChatErrorEvent)
+}
+
+public extension SpectraChatEvent {
+    var roomID: String? {
+        switch self {
+        case .message(let event):
+            return event.roomID
+        case .typing(let event):
+            return event.roomID
+        case .read(let event):
+            return event.roomID
+        case .membership(let event):
+            return event.roomID
+        case .connected(let event), .disconnected(let event):
+            return event.roomID
+        case .error(let event):
+            return event.roomID
+        }
+    }
 }
 
 public enum SpectraChatRealtimeConnectionState: Equatable, Sendable {
@@ -670,6 +825,25 @@ public enum SpectraChatRealtimeEvent: Equatable, Sendable {
     case callLifecycle(SpectraChatCallLifecycleEvent)
     case serverError(SpectraChatServerError)
     case unknown(eventType: String)
+}
+
+public extension SpectraChatRealtimeEvent {
+    var roomID: String? {
+        switch self {
+        case .connectionChanged, .serverError, .unknown:
+            return nil
+        case .messageCreated(let message):
+            return message.roomID
+        case .readCursorUpdated(let event):
+            return event.roomID
+        case .typingUpdated(let event):
+            return event.roomID
+        case .membership(let event):
+            return event.roomID
+        case .callLifecycle(let event):
+            return event.roomID
+        }
+    }
 }
 
 public enum SpectraChatRealtimeError: Error, Equatable, Sendable {
@@ -924,10 +1098,11 @@ public struct SpectraChatCallLifecycleEvent: Decodable, Equatable, Sendable {
             ?? topLevelCall?.chatRoomID
             ?? envelopePayload?.call.chatRoomID
             ?? call.callID
-        roomID = try container.decodeIfPresent(String.self, forKey: .roomID)
+        roomID = try validatedRoomID(
+            try container.decodeIfPresent(String.self, forKey: .roomID)
             ?? topLevelCall?.chatRoomID
             ?? envelopePayload?.call.chatRoomID
-            ?? conversationID
+        )
 
         if let participants = try container.decodeIfPresent([SpectraChatCallParticipant].self, forKey: .participants) {
             self.participants = participants
@@ -1073,6 +1248,7 @@ public struct SpectraChatErrorResponse: Codable, Equatable, Sendable {
 public enum SpectraChatError: Error, Equatable, Sendable {
     case invalidBaseURL
     case invalidRequest(String)
+    case roomIDRequired
     case invalidResponse
     case requestCancelled(SpectraChatErrorResponse)
     case requestTimeout(SpectraChatErrorResponse)
@@ -1089,6 +1265,8 @@ public enum SpectraChatError: Error, Equatable, Sendable {
             return "INVALID_BASE_URL"
         case .invalidRequest:
             return "INVALID_REQUEST"
+        case .roomIDRequired:
+            return "ROOM_ID_REQUIRED"
         case .invalidResponse:
             return "RESPONSE_INVALID"
         case .requestCancelled(let response), .requestTimeout(let response):
@@ -1104,6 +1282,8 @@ public enum SpectraChatError: Error, Equatable, Sendable {
             return "Spectra Chat base URL is invalid."
         case .invalidRequest(let message):
             return message
+        case .roomIDRequired:
+            return "Chat roomID is required. Do not use conversationID as a roomID fallback."
         case .invalidResponse:
             return "Spectra Chat returned an invalid response."
         case .requestCancelled(let response), .requestTimeout(let response):
@@ -1143,6 +1323,19 @@ public final class SpectraChatClient: @unchecked Sendable {
     private let urlSession: URLSession
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private var eventObservationTask: Task<Void, Never>?
+    private lazy var realtimeClient = SpectraChatRealtimeClient(
+        client: self,
+        urlSession: urlSession
+    )
+
+    public weak var delegate: (any SpectraChatClientDelegate)? {
+        didSet { startEventObservationIfNeeded() }
+    }
+
+    public var logger: SpectraChatLogger? {
+        didSet { startEventObservationIfNeeded() }
+    }
 
     public init(
         configuration: SpectraChatClientConfiguration,
@@ -1173,6 +1366,34 @@ public final class SpectraChatClient: @unchecked Sendable {
     }
 
     public convenience init(
+        auth: any ServiceTokenProvider,
+        configuration: SpectraChatClientConfiguration = .production(),
+        storageClient: SpectraStorageClient? = nil,
+        urlSession: URLSession = .shared
+    ) {
+        self.init(
+            configuration: configuration,
+            tokenProvider: SpectraChatAuthServiceTokenProvider(auth: auth),
+            storageClient: storageClient,
+            urlSession: urlSession
+        )
+    }
+
+    public convenience init(
+        auth: any ServiceTokenProvider,
+        projectID: String? = nil,
+        storageClient: SpectraStorageClient? = nil,
+        urlSession: URLSession = .shared
+    ) {
+        self.init(
+            auth: auth,
+            configuration: .production(projectId: projectID),
+            storageClient: storageClient,
+            urlSession: urlSession
+        )
+    }
+
+    public convenience init(
         auth tokenProvider: any SpectraChatAccessTokenProviding,
         projectID: String? = nil,
         storageClient: SpectraStorageClient? = nil,
@@ -1183,6 +1404,22 @@ public final class SpectraChatClient: @unchecked Sendable {
             tokenProvider: tokenProvider,
             storageClient: storageClient,
             urlSession: urlSession
+        )
+    }
+
+    public func getRoom(roomID: String) async throws -> SpectraChatRoom {
+        let roomID = try validatedRoomID(roomID)
+        let rooms = try await listRooms()
+        if let room = rooms.first(where: { $0.roomID == roomID }) {
+            return room
+        }
+        throw SpectraChatError.httpStatus(
+            404,
+            SpectraChatErrorResponse(
+                code: "CHAT_NOT_FOUND",
+                message: "Room was not found.",
+                retryable: false
+            )
         )
     }
 
@@ -1197,11 +1434,17 @@ public final class SpectraChatClient: @unchecked Sendable {
     }
 
     public func createDirectRoom(userID: String) async throws -> SpectraChatRoom {
-        try await createDirectRoom(participantUserID: userID)
+        guard userID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw SpectraChatError.invalidRequest("userID is required")
+        }
+        return try await createDirectRoom(participantUserID: userID)
     }
 
     public func createGroupRoom(title: String? = nil, userIDs: [String]) async throws -> SpectraChatRoom {
-        try await createGroupRoom(title: title ?? "", participantUserIDs: userIDs)
+        guard userIDs.isEmpty == false else {
+            throw SpectraChatError.invalidRequest("createGroupRoom requires at least one userID")
+        }
+        return try await createGroupRoom(title: title ?? "", participantUserIDs: userIDs)
     }
 
     public func createRoom(_ input: SpectraChatCreateRoomRequest) async throws -> SpectraChatRoom {
@@ -1224,6 +1467,9 @@ public final class SpectraChatClient: @unchecked Sendable {
     }
 
     public func createDirectRoom(participantUserID: String) async throws -> SpectraChatRoom {
+        guard participantUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw SpectraChatError.invalidRequest("participantUserID is required")
+        }
         let request = try await makeJSONRequest(
             url: url(path: "/v1/chat/rooms/direct"),
             method: "POST",
@@ -1233,6 +1479,9 @@ public final class SpectraChatClient: @unchecked Sendable {
     }
 
     public func createGroupRoom(title: String, participantUserIDs: [String]) async throws -> SpectraChatRoom {
+        guard participantUserIDs.isEmpty == false else {
+            throw SpectraChatError.invalidRequest("createGroupRoom requires at least one participantUserID")
+        }
         let request = try await makeJSONRequest(
             url: url(path: "/v1/chat/rooms/group"),
             method: "POST",
@@ -1249,6 +1498,7 @@ public final class SpectraChatClient: @unchecked Sendable {
         mentionedUserIDs: [String] = [],
         idempotencyKey: String? = nil
     ) async throws -> SpectraChatMessage {
+        let roomID = try validatedRoomID(roomID)
         let request = try await makeJSONRequest(
             url: url(path: "/v1/chat/rooms/\(encodedPathSegment(roomID))/messages"),
             method: "POST",
@@ -1267,6 +1517,7 @@ public final class SpectraChatClient: @unchecked Sendable {
         roomID: String,
         options: SpectraChatSendMessageOptions
     ) async throws -> SpectraChatMessage {
+        let roomID = try validatedRoomID(roomID)
         var content = SpectraChatSendContent(
             kind: options.attachments.isEmpty ? "text" : "attachment",
             text: options.text,
@@ -1291,11 +1542,32 @@ public final class SpectraChatClient: @unchecked Sendable {
         )
     }
 
+    public func sendMessage(
+        roomID: String,
+        text: String,
+        clientMessageID: String = UUID().uuidString,
+        replyToMessageID: String? = nil,
+        mentionedUserIDs: [String] = [],
+        idempotencyKey: String? = nil
+    ) async throws -> SpectraChatMessage {
+        try await sendMessage(
+            roomID: roomID,
+            options: SpectraChatSendMessageOptions(
+                text: text,
+                clientMessageID: clientMessageID,
+                replyToMessageID: replyToMessageID,
+                mentionedUserIDs: mentionedUserIDs,
+                idempotencyKey: idempotencyKey
+            )
+        )
+    }
+
     public func listMessages(
         roomID: String,
         beforeSequence: Int64? = nil,
         limit: Int? = nil
     ) async throws -> [SpectraChatMessage] {
+        let roomID = try validatedRoomID(roomID)
         var query: [URLQueryItem] = []
         if let beforeSequence {
             query.append(URLQueryItem(name: "before_sequence", value: String(beforeSequence)))
@@ -1319,10 +1591,15 @@ public final class SpectraChatClient: @unchecked Sendable {
         try await updateReadCursor(roomID: roomID, lastReadServerSequence: lastReadSequence)
     }
 
+    public func markRead(roomID: String, sequence: Int64) async throws {
+        try await updateReadCursor(roomID: roomID, lastReadServerSequence: sequence)
+    }
+
     public func leaveRoom(
         roomID: String,
         options: SpectraChatMembershipRequestOptions = SpectraChatMembershipRequestOptions()
     ) async throws -> SpectraChatLeaveRoomResult {
+        let roomID = try validatedRoomID(roomID)
         let membership: SpectraChatRoomMembership = try await withMembershipDeadline(options) {
             let request = try await self.makeRequest(
                 url: self.url(path: "/v1/chat/rooms/\(encodedPathSegment(roomID))/leave"),
@@ -1342,6 +1619,7 @@ public final class SpectraChatClient: @unchecked Sendable {
         roomID: String,
         options: SpectraChatMembershipRequestOptions = SpectraChatMembershipRequestOptions()
     ) async throws -> SpectraChatRoomMembership {
+        let roomID = try validatedRoomID(roomID)
         let membership: SpectraChatRoomMembership = try await withMembershipDeadline(options) {
             let request = try await self.makeRequest(
                 url: self.url(path: "/v1/chat/rooms/\(encodedPathSegment(roomID))/membership"),
@@ -1358,6 +1636,7 @@ public final class SpectraChatClient: @unchecked Sendable {
         roomID: String,
         options: SpectraChatUploadFilesOptions
     ) async throws -> [SpectraChatStorageObjectReference] {
+        let roomID = try validatedRoomID(roomID)
         guard let storageClient else {
             throw SpectraChatError.invalidRequest("uploadFiles requires a SpectraStorageClient")
         }
@@ -1419,6 +1698,7 @@ public final class SpectraChatClient: @unchecked Sendable {
         roomID: String,
         options: SpectraChatSendMessageWithFilesOptions
     ) async throws -> SpectraChatMessage {
+        let roomID = try validatedRoomID(roomID)
         let uploadOptions = options.upload ?? SpectraChatFileUploadOptions()
         let uploadedReferences = options.files.isEmpty
             ? []
@@ -1446,6 +1726,7 @@ public final class SpectraChatClient: @unchecked Sendable {
     }
 
     public func updateReadCursor(roomID: String, lastReadServerSequence: Int64) async throws {
+        let roomID = try validatedRoomID(roomID)
         let request = try await makeJSONRequest(
             url: url(path: "/v1/chat/rooms/\(encodedPathSegment(roomID))/read-cursor"),
             method: "PUT",
@@ -1455,6 +1736,7 @@ public final class SpectraChatClient: @unchecked Sendable {
     }
 
     public func readMediaURLs(roomID: String, assetIDs: [String]) async throws -> [SpectraChatMediaReadURL] {
+        let roomID = try validatedRoomID(roomID)
         let request = try await makeJSONRequest(
             url: url(path: "/v1/chat/rooms/\(encodedPathSegment(roomID))/media/read-urls"),
             method: "POST",
@@ -1472,7 +1754,8 @@ public final class SpectraChatClient: @unchecked Sendable {
         mentionedUserIDs: [String] = [],
         replyToMessageID: String? = nil
     ) -> SpectraChatCommandEnvelope<SpectraChatSendMessage> {
-        SpectraChatCommandEnvelope(
+        precondition(!roomID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "roomID is required")
+        return SpectraChatCommandEnvelope(
             eventID: eventID,
             eventType: "message.send",
             roomID: roomID,
@@ -1490,7 +1773,8 @@ public final class SpectraChatClient: @unchecked Sendable {
         lastReadServerSequence: Int64,
         eventID: String = UUID().uuidString
     ) -> SpectraChatCommandEnvelope<SpectraChatReadCursorUpdate> {
-        SpectraChatCommandEnvelope(
+        precondition(!roomID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "roomID is required")
+        return SpectraChatCommandEnvelope(
             eventID: eventID,
             eventType: "read_cursor.update",
             roomID: roomID,
@@ -1503,7 +1787,8 @@ public final class SpectraChatClient: @unchecked Sendable {
         isTyping: Bool,
         eventID: String = UUID().uuidString
     ) -> SpectraChatCommandEnvelope<SpectraChatTypingSet> {
-        SpectraChatCommandEnvelope(
+        precondition(!roomID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "roomID is required")
+        return SpectraChatCommandEnvelope(
             eventID: eventID,
             eventType: "typing.set",
             roomID: roomID,
@@ -1533,8 +1818,50 @@ public final class SpectraChatClient: @unchecked Sendable {
         try await makeRequest(url: socketURL(), method: "GET")
     }
 
+    public func webSocketTicket(roomID: String) async throws -> SpectraChatWebSocketTicket {
+        let roomID = try validatedRoomID(roomID)
+        let request = try await makeRequest(
+            url: url(path: "/v1/chat/rooms/\(encodedPathSegment(roomID))/websocket-ticket"),
+            method: "POST"
+        )
+        let ticket: SpectraChatWebSocketTicket = try await decodeDataResponse(request: request, expectedStatus: 200)
+        guard ticket.roomID == roomID,
+              ticket.ticketTransport == "query",
+              ticket.ticket.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw SpectraChatError.invalidResponse
+        }
+        return ticket
+    }
+
+    public func connect() async throws {
+        startEventObservationIfNeeded()
+        try await realtimeClient.connect()
+    }
+
+    public func connect(roomID: String) async throws {
+        try await subscribe(roomID: roomID)
+    }
+
+    public func subscribe(roomID: String) async throws {
+        let roomID = try validatedRoomID(roomID)
+        startEventObservationIfNeeded()
+        try await realtimeClient.subscribe(roomID: roomID)
+    }
+
+    public func disconnect() async {
+        await realtimeClient.disconnect()
+    }
+
+    public func setTyping(roomID: String, isTyping: Bool) async throws {
+        try await realtimeClient.setTyping(isTyping, roomID: roomID)
+    }
+
+    public func events() async -> AsyncStream<SpectraChatEvent> {
+        await realtimeClient.eventStream()
+    }
+
     private func makeRequest(url: URL, method: String, idempotencyKey: String? = nil) async throws -> URLRequest {
-        let token = try await tokenProvider.accessToken()
+        let token = try await accessToken(forceRefresh: false)
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -1546,6 +1873,88 @@ public final class SpectraChatClient: @unchecked Sendable {
             request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
         }
         return request
+    }
+
+    func ticketSocketRequest(_ ticket: SpectraChatWebSocketTicket) throws -> URLRequest {
+        var components = try webSocketURLComponents(from: ticket.websocketURL)
+        var queryItems = components.queryItems ?? []
+        queryItems.append(URLQueryItem(name: "ticket", value: ticket.ticket))
+        components.queryItems = queryItems
+        guard let url = components.url else {
+            throw SpectraChatError.invalidBaseURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return request
+    }
+
+    private func accessToken(forceRefresh: Bool) async throws -> String {
+        if let refreshing = tokenProvider as? any SpectraChatAccessTokenRefreshing {
+            let token = try await refreshing.accessToken(forceRefresh: forceRefresh)
+            if forceRefresh {
+                logger?(.info, "token refreshed", [:])
+            }
+            return token
+        }
+        return try await tokenProvider.accessToken()
+    }
+
+    private func startEventObservationIfNeeded() {
+        guard eventObservationTask == nil, delegate != nil || logger != nil else { return }
+        eventObservationTask = Task { [weak self] in
+            guard let self else { return }
+            let stream = await self.realtimeClient.eventStream()
+            for await event in stream {
+                self.delegate?.spectraChatClient(self, didReceive: event)
+                self.log(event)
+            }
+        }
+    }
+
+    private func log(_ level: SpectraChatLogLevel, _ event: String, _ fields: [String: String] = [:]) {
+        logger?(level, event, fields)
+    }
+
+    private func log(_ event: SpectraChatEvent) {
+        switch event {
+        case .message(let message):
+            log(.info, "message received", message.logFields)
+        case .typing(let typing):
+            log(.debug, "typing received", typing.logFields)
+        case .read(let read):
+            log(.debug, "read received", read.logFields)
+        case .membership(let membership):
+            log(.info, "membership received", ["roomID": membership.roomID])
+        case .connected(let connection):
+            delegate?.spectraChatClient(self, didChangeConnectionState: .connected)
+            log(.info, "connected", connection.logFields)
+        case .disconnected(let connection):
+            delegate?.spectraChatClient(self, didChangeConnectionState: .disconnected)
+            log(.info, "disconnected", connection.logFields)
+        case .error(let error):
+            delegate?.spectraChatClient(self, didReceiveError: error.error)
+            log(.error, "error", error.logFields)
+        }
+    }
+
+    private func webSocketURLComponents(from ticketURL: String) throws -> URLComponents {
+        if let absoluteURL = URL(string: ticketURL),
+           absoluteURL.scheme == "ws" || absoluteURL.scheme == "wss" {
+            guard let components = URLComponents(url: absoluteURL, resolvingAgainstBaseURL: false) else {
+                throw SpectraChatError.invalidBaseURL
+            }
+            return components
+        }
+        let base = try socketURL()
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+            throw SpectraChatError.invalidBaseURL
+        }
+        if ticketURL.hasPrefix("/") {
+            components.percentEncodedPath = ticketURL
+            components.queryItems = nil
+        }
+        return components
     }
 
     private func makeJSONRequest<Body: Encodable>(
@@ -1604,6 +2013,8 @@ public actor SpectraChatRealtimeClient {
     private var eventSubscribers: [UUID: AsyncStream<SpectraChatEvent>.Continuation] = [:]
     private var pendingMessages: [String: PendingMessage] = [:]
     private var pendingRequestToClientMessage: [String: String] = [:]
+    private var subscribedRoomIDs: Set<String> = []
+    private var activeRoomID: String?
     private var reconnectAttempt = 0
     private var intentionallyDisconnected = false
 
@@ -1677,9 +2088,13 @@ public actor SpectraChatRealtimeClient {
 
     public func connect() async throws {
         if socketTask != nil { return }
+        guard let roomID = activeRoomID ?? subscribedRoomIDs.first else { return }
         intentionallyDisconnected = false
         yield(.connectionChanged(.connecting))
-        let request = try await client.socketRequest()
+        client.delegate?.spectraChatClient(client, didChangeConnectionState: .connecting)
+        client.logger?(.info, "socket connecting", ["roomID": roomID])
+        let ticket = try await client.webSocketTicket(roomID: roomID)
+        let request = try client.ticketSocketRequest(ticket)
         let task = urlSession.webSocketTask(with: request)
         socketTask = task
         task.resume()
@@ -1687,8 +2102,27 @@ public actor SpectraChatRealtimeClient {
     }
 
     public func connect(roomID: String?) async throws {
-        _ = roomID
-        try await connect()
+        guard let roomID else {
+            throw SpectraChatError.roomIDRequired
+        }
+        try await subscribe(roomID: roomID)
+    }
+
+    public func subscribe(roomID: String) async throws {
+        let roomID = try validatedRoomID(roomID)
+        subscribedRoomIDs.insert(roomID)
+        activeRoomID = roomID
+        do {
+            try await connect()
+            client.logger?(.info, "room subscribed", ["roomID": roomID])
+        } catch {
+            subscribedRoomIDs.remove(roomID)
+            if activeRoomID == roomID {
+                activeRoomID = subscribedRoomIDs.first
+            }
+            client.logger?(.error, "error", ["roomID": roomID, "errorCode": safeErrorCode(error)])
+            throw error
+        }
     }
 
     public func disconnect() {
@@ -1729,6 +2163,10 @@ public actor SpectraChatRealtimeClient {
         replyToMessageID: String? = nil,
         mentionedUserIDs: [String] = []
     ) async throws -> SpectraChatMessage {
+        let roomID = try validatedRoomID(roomID)
+        guard subscribedRoomIDs.contains(roomID) else {
+            throw SpectraChatError.invalidRequest("subscribe(roomID:) before sending realtime messages")
+        }
         try await connect()
         let eventID = UUID().uuidString
         let command = SpectraChatCommandEnvelope(
@@ -1767,6 +2205,10 @@ public actor SpectraChatRealtimeClient {
     }
 
     public func updateReadCursor(roomID: String, lastReadServerSequence: Int64) async throws {
+        let roomID = try validatedRoomID(roomID)
+        guard subscribedRoomIDs.contains(roomID) else {
+            throw SpectraChatError.invalidRequest("subscribe(roomID:) before updating read cursors")
+        }
         let command = client.makeReadCursorCommand(
             roomID: roomID,
             lastReadServerSequence: lastReadServerSequence
@@ -1775,6 +2217,10 @@ public actor SpectraChatRealtimeClient {
     }
 
     public func setTyping(_ isTyping: Bool, roomID: String) async throws {
+        let roomID = try validatedRoomID(roomID)
+        guard subscribedRoomIDs.contains(roomID) else {
+            throw SpectraChatError.invalidRequest("subscribe(roomID:) before setting typing state")
+        }
         let command = client.makeTypingCommand(roomID: roomID, isTyping: isTyping)
         try await send(command)
     }
@@ -1797,9 +2243,10 @@ public actor SpectraChatRealtimeClient {
             return .connectionChanged(.connected)
         case "message.created":
             let envelope = try decoder.decode(SocketEnvelope<MessageCreatedPayload>.self, from: data)
+            _ = try validatedRoomID(envelope.roomID ?? envelope.payload.message.roomID)
             return .messageCreated(envelope.payload.message)
         case "read_cursor.updated":
-            let roomID = header.roomID ?? ""
+            let roomID = try validatedRoomID(header.roomID)
             let envelope = try decoder.decode(SocketEnvelope<ReadCursorUpdatedPayload>.self, from: data)
             return .readCursorUpdated(
                 SpectraChatReadCursorUpdated(
@@ -1809,7 +2256,7 @@ public actor SpectraChatRealtimeClient {
                 )
             )
         case "typing.updated":
-            let roomID = header.roomID ?? ""
+            let roomID = try validatedRoomID(header.roomID)
             let envelope = try decoder.decode(SocketEnvelope<TypingUpdatedPayload>.self, from: data)
             return .typingUpdated(
                 SpectraChatTypingUpdated(
@@ -1864,12 +2311,19 @@ public actor SpectraChatRealtimeClient {
         switch header.eventType {
         case "connection.ready":
             let envelope = try decoder.decode(SocketEnvelope<EmptySocketPayload>.self, from: data)
-            return .connected(SpectraChatConnectionEvent(roomID: header.roomID, occurredAt: envelope.occurredAt))
+            return .connected(
+                SpectraChatConnectionEvent(
+                    roomID: header.roomID,
+                    occurredAt: envelope.occurredAt,
+                    connectionID: connectionID(from: header.eventID)
+                )
+            )
         case "message.created":
             let envelope = try decoder.decode(SocketEnvelope<MessageCreatedPayload>.self, from: data)
+            let roomID = try validatedRoomID(envelope.roomID ?? envelope.payload.message.roomID)
             return .message(
                 SpectraChatMessageEvent(
-                    roomID: envelope.roomID ?? envelope.payload.message.roomID,
+                    roomID: roomID,
                     message: envelope.payload.message,
                     sequence: envelope.serverSequence ?? envelope.payload.message.serverSequence,
                     occurredAt: envelope.occurredAt
@@ -1877,9 +2331,10 @@ public actor SpectraChatRealtimeClient {
             )
         case "typing.updated":
             let envelope = try decoder.decode(SocketEnvelope<TypingUpdatedPayload>.self, from: data)
+            let roomID = try validatedRoomID(envelope.roomID)
             return .typing(
                 SpectraChatTypingEvent(
-                    roomID: envelope.roomID ?? "",
+                    roomID: roomID,
                     userID: envelope.payload.userID,
                     isTyping: envelope.payload.isTyping,
                     sequence: envelope.serverSequence ?? 0,
@@ -1888,9 +2343,10 @@ public actor SpectraChatRealtimeClient {
             )
         case "read_cursor.updated":
             let envelope = try decoder.decode(SocketEnvelope<ReadCursorUpdatedPayload>.self, from: data)
+            let roomID = try validatedRoomID(envelope.roomID)
             return .read(
                 SpectraChatReadEvent(
-                    roomID: envelope.roomID ?? "",
+                    roomID: roomID,
                     userID: envelope.payload.userID,
                     lastReadSequence: envelope.payload.lastReadServerSequence,
                     sequence: envelope.serverSequence ?? 0,
@@ -1929,6 +2385,16 @@ public actor SpectraChatRealtimeClient {
         default:
             throw SpectraChatError.invalidResponse
         }
+    }
+
+    static func shouldDeliver(_ event: SpectraChatRealtimeEvent, subscribedRoomIDs: Set<String>) -> Bool {
+        guard let roomID = event.roomID else { return true }
+        return subscribedRoomIDs.contains(roomID)
+    }
+
+    static func shouldDeliver(_ event: SpectraChatEvent, subscribedRoomIDs: Set<String>) -> Bool {
+        guard let roomID = event.roomID else { return true }
+        return subscribedRoomIDs.contains(roomID)
     }
 
     private func receiveLoop(_ task: URLSessionWebSocketTask) async {
@@ -1974,8 +2440,10 @@ public actor SpectraChatRealtimeClient {
            let clientMessageID = pendingRequestToClientMessage[requestEventID] {
             failPendingMessage(clientMessageID, error: SpectraChatRealtimeError.server(serverError))
         }
+        guard shouldDeliver(event) else { return }
         yield(event)
         if let chatEvent = try? Self.decodeChatEvent(from: data) {
+            guard shouldDeliver(chatEvent) else { return }
             yield(chatEvent)
         }
     }
@@ -1998,6 +2466,12 @@ public actor SpectraChatRealtimeClient {
         reconnectAttempt += 1
         let attempt = reconnectAttempt
         yield(.connectionChanged(.reconnecting(attempt: attempt)))
+        var fields: [String: String] = ["attempt": String(attempt)]
+        if let activeRoomID {
+            fields["roomID"] = activeRoomID
+        }
+        client.delegate?.spectraChatClient(client, didChangeConnectionState: .reconnecting(attempt: attempt))
+        client.logger?(.warning, "reconnecting", fields)
         reconnectTask = Task {
             let cappedAttempt = min(attempt, 5)
             let delay = UInt64(1 << (cappedAttempt - 1)) * 1_000_000_000
@@ -2060,13 +2534,23 @@ public actor SpectraChatRealtimeClient {
         pendingRequestToClientMessage.removeAll()
         pending.values.forEach { $0.continuation.resume(throwing: error) }
     }
+
+    private func shouldDeliver(_ event: SpectraChatRealtimeEvent) -> Bool {
+        Self.shouldDeliver(event, subscribedRoomIDs: subscribedRoomIDs)
+    }
+
+    private func shouldDeliver(_ event: SpectraChatEvent) -> Bool {
+        Self.shouldDeliver(event, subscribedRoomIDs: subscribedRoomIDs)
+    }
 }
 
 private struct SocketEventHeader: Decodable {
+    var eventID: String?
     var eventType: String
     var roomID: String?
 
     enum CodingKeys: String, CodingKey {
+        case eventID = "event_id"
         case eventType = "event_type"
         case roomID = "room_id"
     }
@@ -2230,6 +2714,39 @@ private func validateMembership(_ membership: SpectraChatRoomMembership, roomID:
           membership.appUserID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
         throw SpectraChatError.invalidResponse
     }
+}
+
+private func validatedRoomID(_ roomID: String?) throws -> String {
+    guard let roomID,
+          roomID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+        throw SpectraChatError.roomIDRequired
+    }
+    return roomID
+}
+
+private func connectionID(from eventID: String?) -> String? {
+    guard let eventID,
+          eventID.hasPrefix("evt_connection_") else {
+        return nil
+    }
+    return String(eventID.dropFirst("evt_connection_".count))
+}
+
+private func safeErrorCode(_ error: Error) -> String {
+    if let chatError = error as? SpectraChatError {
+        return chatError.code
+    }
+    if let realtimeError = error as? SpectraChatRealtimeError {
+        switch realtimeError {
+        case .disconnected:
+            return "SOCKET_DISCONNECTED"
+        case .acknowledgementTimedOut:
+            return "MESSAGE_ACK_TIMEOUT"
+        case .server(let serverError):
+            return serverError.code
+        }
+    }
+    return "UNKNOWN"
 }
 
 private func normalizedChatAttachmentPath(

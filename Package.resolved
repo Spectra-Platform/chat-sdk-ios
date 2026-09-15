@@ -1,6 +1,15 @@
 {
   "pins" : [
     {
+      "identity" : "auth-sdk-ios",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Spectra-Platform/auth-sdk-ios.git",
+      "state" : {
+        "revision" : "ca6d18b8d86d74293ce6557f1e34ea03b3b1306d",
+        "version" : "0.1.2"
+      }
+    },
+    {
       "identity" : "storage-sdk-ios",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Spectra-Platform/storage-sdk-ios.git",

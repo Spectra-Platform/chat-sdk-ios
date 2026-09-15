@@ -1,4 +1,5 @@
 import Foundation
+import SpectraAuthSDK
 import SpectraStorageSDK
 import XCTest
 @testable import SpectraChatSDK
@@ -27,6 +28,82 @@ final class SpectraChatClientTests: XCTestCase {
         )
 
         XCTAssertEqual(try client.socketURL().absoluteString, "wss://chat.spectra.kr/v1/socket")
+    }
+
+    func testAuthServiceTokenProviderRequestsChatToken() async throws {
+        let auth = MockServiceTokenProvider()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let client = SpectraChatClient(
+            auth: auth,
+            configuration: SpectraChatClientConfiguration(
+                baseURL: URL(string: "https://chat.example.test")!,
+                projectId: "project_123"
+            ),
+            urlSession: URLSession(configuration: configuration)
+        )
+
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer chat_service_token")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Spectra-Project-Id"), "project_123")
+            return jsonResponse(
+                status: 200,
+                body: """
+                {
+                  "data": {
+                    "rooms": []
+                  }
+                }
+                """
+            )
+        }
+
+        _ = try await client.listRooms()
+
+        let requests = await auth.requests
+        XCTAssertEqual(requests, [MockServiceTokenProvider.Request(service: .chat, forceRefresh: false)])
+    }
+
+    func testRoomIDRequiredFailuresDoNotUseConversationFallback() async throws {
+        let client = makeClient()
+
+        do {
+            _ = try await client.listMessages(roomID: " ")
+            XCTFail("Expected roomIDRequired")
+        } catch let error as SpectraChatError {
+            XCTAssertEqual(error.code, "ROOM_ID_REQUIRED")
+        }
+
+        do {
+            try await client.setTyping(roomID: "", isTyping: true)
+            XCTFail("Expected roomIDRequired")
+        } catch let error as SpectraChatError {
+            XCTAssertEqual(error.code, "ROOM_ID_REQUIRED")
+        }
+
+        let callEventWithConversationOnly = Data(
+            """
+            {
+              "event_id": "evt_call",
+              "event_type": "call.invited",
+              "conversation_id": "conv_123",
+              "occurred_at": "2026-07-26T04:00:00Z",
+              "call": {
+                "call_id": "call_123",
+                "status": "ringing",
+                "media_mode": "video",
+                "call_type": "direct"
+              }
+            }
+            """.utf8
+        )
+
+        do {
+            _ = try SpectraChatCallLifecycleEvent.decode(from: callEventWithConversationOnly)
+            XCTFail("Expected roomIDRequired")
+        } catch let error as SpectraChatError {
+            XCTAssertEqual(error.code, "ROOM_ID_REQUIRED")
+        }
     }
 
     func testListRoomsAttachesBearerAndDecodesRooms() async throws {
@@ -339,6 +416,9 @@ final class SpectraChatClientTests: XCTestCase {
             tokenProvider: DelayedSpectraChatTokenProvider(delayNanoseconds: 200_000_000),
             urlSession: URLSession(configuration: configuration)
         )
+        MockURLProtocol.handler = { _ in
+            membershipResponse(status: 200, state: "active")
+        }
 
         do {
             _ = try await client.getRoomMembership(
@@ -671,6 +751,111 @@ final class SpectraChatClientTests: XCTestCase {
         XCTAssertEqual(request.httpMethod, "GET")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer chat_access_token")
         XCTAssertEqual(request.value(forHTTPHeaderField: "X-Spectra-Project-Id"), "project_123")
+    }
+
+    func testWebSocketTicketUsesRoomEndpointAndBuildsTicketSocketRequest() async throws {
+        let client = makeClient(
+            baseURL: URL(string: "https://chat.example.test")!,
+            socketURL: URL(string: "wss://socket.example.test/v1/socket")!,
+            projectId: "project_123"
+        )
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/chat/rooms/room_123/websocket-ticket")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer chat_access_token")
+            return jsonResponse(
+                status: 200,
+                body: """
+                {
+                  "data": {
+                    "websocket_url": "/v1/socket",
+                    "ticket": "chat_ws_ticket_value",
+                    "ticket_transport": "query",
+                    "expires_at": "2026-07-25T00:02:00Z",
+                    "room_id": "room_123"
+                  }
+                }
+                """
+            )
+        }
+
+        let ticket = try await client.webSocketTicket(roomID: "room_123")
+        let request = try client.ticketSocketRequest(ticket)
+
+        XCTAssertEqual(ticket.roomID, "room_123")
+        XCTAssertEqual(request.url?.absoluteString, "wss://socket.example.test/v1/socket?ticket=chat_ws_ticket_value")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+    }
+
+    func testLoggerUsesSafeFieldsWhenSubscribing() async throws {
+        let logger = LogRecorder()
+        let client = makeClient(
+            socketURL: URL(string: "wss://socket.example.test/v1/socket")!,
+            projectId: "project_123"
+        )
+        client.logger = { level, event, fields in
+            logger.append(level: level, event: event, fields: fields)
+        }
+
+        MockURLProtocol.handler = { _ in
+            jsonResponse(
+                status: 200,
+                body: """
+                {
+                  "data": {
+                    "websocket_url": "/v1/socket",
+                    "ticket": "chat_ws_secret_ticket",
+                    "ticket_transport": "query",
+                    "expires_at": "2026-07-25T00:02:00Z",
+                    "room_id": "room_123"
+                  }
+                }
+                """
+            )
+        }
+
+        try await client.subscribe(roomID: "room_123")
+        await client.disconnect()
+
+        let entries = logger.entries
+        XCTAssertTrue(entries.contains { $0.event == "socket connecting" && $0.fields["roomID"] == "room_123" })
+        XCTAssertTrue(entries.contains { $0.event == "room subscribed" && $0.fields["roomID"] == "room_123" })
+        XCTAssertFalse(entries.description.contains("chat_access_token"))
+        XCTAssertFalse(entries.description.contains("chat_ws_secret_ticket"))
+    }
+
+    func testSubscribeEventFilteringKeepsOnlySubscribedRoomEvents() throws {
+        let subscribed: Set<String> = ["room_123"]
+        let message = SpectraChatMessage(
+            messageID: "msg_123",
+            roomID: "room_123",
+            serverSequence: 1,
+            clientMessageID: "client_123",
+            senderUserID: "usr_a",
+            content: SpectraChatContent(kind: "text", text: "hello"),
+            replyToMessageID: nil,
+            mentionedUserIDs: [],
+            createdAt: Date(timeIntervalSince1970: 0),
+            editedAt: nil,
+            deletedAt: nil
+        )
+        let otherMessage = SpectraChatMessage(
+            messageID: "msg_456",
+            roomID: "room_456",
+            serverSequence: 2,
+            clientMessageID: "client_456",
+            senderUserID: "usr_b",
+            content: SpectraChatContent(kind: "text", text: "hidden"),
+            replyToMessageID: nil,
+            mentionedUserIDs: [],
+            createdAt: Date(timeIntervalSince1970: 0),
+            editedAt: nil,
+            deletedAt: nil
+        )
+
+        XCTAssertTrue(SpectraChatRealtimeClient.shouldDeliver(.messageCreated(message), subscribedRoomIDs: subscribed))
+        XCTAssertFalse(SpectraChatRealtimeClient.shouldDeliver(.messageCreated(otherMessage), subscribedRoomIDs: subscribed))
+        XCTAssertTrue(SpectraChatRealtimeClient.shouldDeliver(.connectionChanged(.connected), subscribedRoomIDs: subscribed))
     }
 
     func testTypingCommandMatchesSocketContract() throws {
@@ -1376,6 +1561,71 @@ private struct DelayedSpectraChatTokenProvider: SpectraChatAccessTokenProviding 
     func accessToken() async throws -> String {
         try await Task.sleep(nanoseconds: delayNanoseconds)
         return "chat_access_token"
+    }
+}
+
+private actor MockServiceTokenProvider: ServiceTokenProvider {
+    struct Request: Equatable {
+        var service: AuthService
+        var forceRefresh: Bool
+    }
+
+    private(set) var requests: [Request] = []
+    var currentUser: AppUser? { nil }
+
+    func getAccessToken(forceRefresh: Bool) async throws -> AccessToken {
+        requests.append(Request(service: .auth, forceRefresh: forceRefresh))
+        return token(value: "auth_access_token", audience: [.auth])
+    }
+
+    func refresh() async throws -> AccessToken {
+        try await getAccessToken(forceRefresh: true)
+    }
+
+    func getAccessToken(for service: AuthService, forceRefresh: Bool) async throws -> AccessToken {
+        requests.append(Request(service: service, forceRefresh: forceRefresh))
+        return token(value: "\(service.rawValue)_service_token", audience: [service])
+    }
+
+    func refresh(for service: AuthService) async throws -> AccessToken {
+        try await getAccessToken(for: service, forceRefresh: true)
+    }
+
+    func logout() async {}
+
+    private func token(value: String, audience: Set<AuthService>) -> AccessToken {
+        AccessToken(
+            value: value,
+            expiresAt: Date(timeIntervalSince1970: 4_102_444_800),
+            audience: Set(audience.map(\.rawValue))
+        )
+    }
+}
+
+private final class LogRecorder: @unchecked Sendable {
+    struct Entry: CustomStringConvertible {
+        var level: SpectraChatLogLevel
+        var event: String
+        var fields: [String: String]
+
+        var description: String {
+            "\(level.rawValue) \(event) \(fields)"
+        }
+    }
+
+    private let lock = NSLock()
+    private var values: [Entry] = []
+
+    var entries: [Entry] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
+    }
+
+    func append(level: SpectraChatLogLevel, event: String, fields: [String: String]) {
+        lock.lock()
+        values.append(Entry(level: level, event: event, fields: fields))
+        lock.unlock()
     }
 }
 

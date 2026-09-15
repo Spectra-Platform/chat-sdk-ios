@@ -1,5 +1,21 @@
 # WORKLOG — chat-sdk-ios
 
+## 2026-09-15 — Modo Camp room-centric Chat SDK DX
+
+- 상태: 완료, Modo Camp iOS 앱·실기기 Live 세션 E2E와 SwiftPM tag 생성은 미수행
+- 목적: Modo Camp가 raw WebSocket, Chat token refresh, reconnect, room event filtering을 직접 관리하지 않고
+  AuthSDK 객체와 room 중심 API만으로 Chat realtime platform layer를 사용할 수 있게 한다.
+- 주요 변경 영역:
+  - `SpectraChatClient(auth:)` AuthSDK `ServiceTokenProvider` convenience와 `.chat` service token adapter 추가
+  - `getRoom(roomID:)`, `SpectraChatRoom.id`, `sendMessage(roomID:text:)`, `markRead(roomID:sequence:)`,
+    `connect()`, `subscribe(roomID:)`, `connect(roomID:)`, `setTyping(roomID:isTyping:)` 추가
+  - websocket-ticket 기반 subscribe/reconnect, subscribed-room event filtering, `ROOM_ID_REQUIRED`와
+    conversationID fallback 금지 추가
+  - delegate/logger, safe log fields, token/ticket redaction 테스트 추가
+  - AuthSDK dependency 반영으로 minimum platform을 iOS 17/macOS 14로 조정
+- 검증 상태: `swift test` 40 tests 통과, `git diff --check` 통과
+- 상세 기록: [`docs/work-logs/2026-09-15-01-chat-sdk-room-centric-dx.md`](docs/work-logs/2026-09-15-01-chat-sdk-room-centric-dx.md)
+
 ## 2026-09-11 — Modo Camp Chat parity implementation
 
 - 상태: 완료, Modo Camp iOS 앱·실기기 Live 세션 E2E는 미검증

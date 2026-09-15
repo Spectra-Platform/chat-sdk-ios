@@ -5,8 +5,8 @@ import PackageDescription
 let package = Package(
     name: "SpectraChatSDK",
     platforms: [
-        .iOS(.v15),
-        .macOS(.v12),
+        .iOS(.v17),
+        .macOS(.v14),
     ],
     products: [
         .library(
@@ -15,6 +15,7 @@ let package = Package(
         ),
     ],
     dependencies: [
+        .package(url: "https://github.com/Spectra-Platform/auth-sdk-ios.git", .upToNextMinor(from: "0.1.2")),
         .package(url: "https://github.com/Spectra-Platform/storage-sdk-ios.git", .upToNextMinor(from: "0.1.1")),
     ],
     targets: [
@@ -22,6 +23,7 @@ let package = Package(
             name: "SpectraChatSDK",
             dependencies: [
                 .product(name: "SpectraStorageSDK", package: "storage-sdk-ios"),
+                .product(name: "SpectraAuthSDK", package: "auth-sdk-ios"),
             ]
         ),
         .testTarget(
@@ -29,6 +31,7 @@ let package = Package(
             dependencies: [
                 "SpectraChatSDK",
                 .product(name: "SpectraStorageSDK", package: "storage-sdk-ios"),
+                .product(name: "SpectraAuthSDK", package: "auth-sdk-ios"),
             ]
         ),
     ]
