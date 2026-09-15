@@ -5,7 +5,7 @@
 - 상태: 완료, Modo Camp iOS 앱·실기기 Live 세션 E2E는 미수행
 - 목적: Modo Camp가 설치 가능한 SwiftPM tag로 room-first Chat SDK API를 확인할 수 있게 한다.
 - 결과: `origin/main`에 `96eb8ca9e16985eb612dfab11788387e43f3c5e8` room-first 변경을 push했고, 같은 commit을 가리키는 annotated tag `v0.2.0`을 원격에 push했다.
-- 검증 상태: `swift test` 40 tests 통과, `git diff --check` 통과, `git ls-remote`로 `origin/main`과 `refs/tags/v0.2.0` 원격 반영을 확인했다.
+- 검증 상태: `swift test` 40 tests 통과, `git diff --check` 통과, `git ls-remote`로 `origin/main`과 `refs/tags/v0.2.0` 원격 반영을 확인했다. 임시 SwiftPM package에서 `exact: "0.2.0"` resolution 성공을 확인했다.
 - 남음: 실제 Modo Camp iOS 앱에서 SwiftPM resolution, Live Auth session, realtime subscribe/send E2E 검증.
 
 ## 2026-09-15 — Modo Camp room-centric Chat SDK DX
